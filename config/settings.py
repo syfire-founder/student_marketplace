@@ -9,7 +9,8 @@ https://docs.djangoproject.com/en/5.2/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
-
+import os
+from dotenv import load_dotenv
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -142,4 +143,20 @@ REST_FRAMEWORK = {
 
 'rest_framework.filters.OrderingFilter',
     ),        
+}
+
+
+
+
+load_dotenv()
+
+SECRET_KEY = os.getenv("SECRETE_KEY")
+DEBUG = os.getenv("DEBUG") == "True"
+DATABASES = {
+    'default':{
+        'ENGINE':
+'django.db.backends.sqlite3',
+        'NAME':
+os.getenv("DATABASE_URL").split(":///")[1],
+    }
 }
