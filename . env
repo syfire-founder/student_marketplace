@@ -1,0 +1,3 @@
+SECRETE_KEY=your_secrete_key_here
+DEBUG=True
+DATABASE_URL=sqlite:///db.sqlite3
