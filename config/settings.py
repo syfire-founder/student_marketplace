@@ -39,7 +39,9 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'rest_framework.authtoken',
     'users',
+    'django_extensions',
 ]
 
 MIDDLEWARE = [
@@ -152,11 +154,15 @@ load_dotenv()
 
 SECRET_KEY = os.getenv("SECRETE_KEY")
 DEBUG = os.getenv("DEBUG") == "True"
+DATABASES_URL = os.getenv("DATABASE_URL")
+
+if not DATABASES_URL:
+    raise Exception("DATABASE_URL not set in enviroment")
+
 DATABASES = {
-    'default':{
-        'ENGINE':
-'django.db.backends.sqlite3',
-        'NAME':
-os.getenv("DATABASE_URL").split(":///")[1],
+    "default":{
+        "ENGINE":
+"django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
     }
 }
