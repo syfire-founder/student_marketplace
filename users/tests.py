@@ -2,8 +2,9 @@ from django.contrib.auth.models import User
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from .models import BusinessProfile, Product, Category
-
+from .models import BusinessProfile, Product, Category, School
+from django.db.models import ProtectedError
+from .models import UserProfile
 
 class ProductAPITest(APITestCase):
 
@@ -19,24 +20,43 @@ class ProductAPITest(APITestCase):
             password="password123"
         )
 
+
+       
         # category
         self.category = Category.objects.create(name="Electronics")
+
+        #school
+
+        self.school = School.objects.create(name="Test University")
+
+        UserProfile.objects.create(user=self.user, school=self.school)
+        UserProfile.objects.create(user=self.other_user, school=self.school)
+
 
         # business
         self.business = BusinessProfile.objects.create(
             user=self.user,
-            business_name="Owner Business",
-            category=self.category
+            name="Owner Business",
+            category=self.category,
+            school = self.school
         )
 
         # product
         self.product = Product.objects.create(
-            name="Laptop",
-            price=1000,
+            name="Test Product",
+            price=1000.00,
+            is_private=False,
             business=self.business
         )
 
         self.products_url = "/api/products/"
+
+        self.private_product = Product.objects.create(
+            name="Private Product",
+            business=self.business,
+            price=100,
+            is_private=True
+            )
 
     # -------------------------
     # LIST PRODUCTS
@@ -45,7 +65,7 @@ class ProductAPITest(APITestCase):
         self.client.force_authenticate(user=self.user)
         response = self.client.get("/api/products/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data["results"]), 1)
+        self.assertEqual(len(response.data["results"]), 2)
 
     # -------------------------
     # CREATE PRODUCT (OWNER)
@@ -60,7 +80,7 @@ class ProductAPITest(APITestCase):
 
         response = self.client.post(self.products_url, data)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(Product.objects.count(), 2)
+        self.assertEqual(Product.objects.count(), 3)
 
     # -------------------------
     # CREATE PRODUCT (NO BUSINESS)
@@ -114,13 +134,16 @@ class ProductAPITest(APITestCase):
 
         other_business = BusinessProfile.objects.create(
             user=other_user,
-        name="Other Biz"
+            name="Other Biz",
+            category=self.category,
+            school=self.school
     )
 
         private_product = Product.objects.create(
             name="Secret Product",
+            price=50000,
         business=other_business,
-        is_public=False
+        is_private=True
     )
 
         self.client.force_authenticate(user=self.user)
@@ -134,8 +157,9 @@ class ProductAPITest(APITestCase):
     def test_anonymous_cannot_see_private_product(self):
         private_product = Product.objects.create(
             name="Private",
+            price=4000,
             business=self.business,
-            is_public=False
+            is_private=True
     )
 
         response = self.client.get(f"/api/products/{private_product.id}/")
@@ -146,8 +170,9 @@ class ProductAPITest(APITestCase):
     def test_owner_can_see_own_private_product(self):
         private_product = Product.objects.create(
             name="Mine",
+            price=30000,
             business=self.business,
-            is_public=False
+            is_private=True
     )
 
         self.client.force_authenticate(user=self.user)
@@ -156,3 +181,36 @@ class ProductAPITest(APITestCase):
 
         self.assertEqual(response.status_code, 200)
 
+    def test_category_cannot_be_deleted_if_business_exists(self):
+        with self.assertRaises(ProtectedError):
+            self.category.delete()
+
+
+
+    def test_private_product_not_in_list_for_other_user(self):
+        other_user = User.objects.create_user(
+            username="other",
+            password="password123"
+        )
+        self.client.force_authenticate(user=other_user)
+        response = self.client.get("/api/products/")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, self.private_product.name)
+
+        """ 
+        self.assertNotIn(
+    self.private_product.id,
+    [p["id"] for p in response.data["results"]]
+)
+"""
+       
+
+
+        """
+        self.client.login(username="other", password="password123")
+
+        response = self.client.get("/products/")
+        self.assertNotContains(response, self.private_product.name)
+        """
+
+    

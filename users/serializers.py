@@ -1,8 +1,9 @@
 from rest_framework import serializers
 from .models import BusinessProfile, Product
+from .models import ListingImage
 from .models import Category
 from django.contrib.auth.models import User
-
+from .models import School
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -13,7 +14,7 @@ class CategorySerializer(serializers.ModelSerializer):
 class BusinessProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = BusinessProfile
-        fields = ['id', 'business_name', 'business_category','created_at',]
+        fields = ['name', 'description', 'category', 'school',]
         read_only_fields = ['id', "created_at"]
     
     def create(self, validated_data):
@@ -44,12 +45,31 @@ class UserRegisterSerializer(serializers.ModelSerializer):
             password=validated_data['password']
         )
         return user
+
+class ListingImageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ListingImage
+        fields = '__all__'
+    def validate_image(self, value):
+        if value.size > 2 * 1024 * 1024:
+            raise serializers.ValidationError("Image too large")
+        return value
     
 
 
 class ProductSerializer(serializers.ModelSerializer):
-        class Meta:
-            model = Product
-            fields = "__all__"
-            read_only_fields = ["business"]
+
+    images = ListingImageSerializer(many=True, read_only=True)
+    class Meta:
+        model = Product
+        fields = "__all__"
+        read_only_fields = ["business"]
+            
+        
+
+class SchoolSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = School
+        fields = '__all__'
+
 #Don't allow clients to set business

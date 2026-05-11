@@ -22,7 +22,7 @@ class IsBusinessOwnerOrReadOnly(BasePermission):
     """
     def has_object_permission(self, request, view, obj):
         #safe methods like GET, HEAD, OPTIONS are always allowed for any authenticated user
-        if request.method in permissions.SAFE_METHODS:
+        if request.method in ['GET', 'HEAD', 'OPTIONS']:
             return True
         #Only the owner of the business can edit/delete
         return obj.business.user == request.user

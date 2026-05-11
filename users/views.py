@@ -4,7 +4,7 @@ from rest_framework.filters import SearchFilter
 from rest_framework.exceptions import ValidationError
 
 from .models import BusinessProfile, Product
-from .serializers import BusinessProfileSerializer, ProductSerializer
+from .serializers import BusinessProfileSerializer, ProductSerializer, ListingImageSerializer
 
 from rest_framework import generics, permissions
 from .models import Category
@@ -19,9 +19,14 @@ from .permisions import IsOwnerOrReadOnly, IsBusinessOwnerOrReadOnly
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticatedOrReadOnly
 from rest_framework.viewsets import ModelViewSet
-from .models import Product
+from .models import UserProfile
 from django.db.models import Q
-
+from django_filters.rest_framework import DjangoFilterBackend
+from .models import ListingImage
+from django.shortcuts import get_object_or_404
+from rest_framework.permissions import AllowAny
+from .models import School
+from .serializers import SchoolSerializer
 
 
 
@@ -132,6 +137,7 @@ class BusinessProfileRetriveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIV
 class RegisterView(generics.CreateAPIView):
     queryset = User.objects.all()
     serializer_class = UserRegisterSerializer
+    permission_classes = [AllowAny]
 
     def create(self, request, *args, **kwargs):
         response = super().create(request, *args, **kwargs)
@@ -141,29 +147,6 @@ class RegisterView(generics.CreateAPIView):
             'user': response.data,
             'token': token.key
         })
-    
-
-
-
-class ProductListCreateView(generics.ListCreateAPIView):
-    serializer_class = ProductSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        user = self.request.user
-        return Product.objects.filter(business_user=user).order_by("id")
-
-    def perform_create(self, serializer):
-         
-        user = self.request.user
-
-        if not hasattr(user, "businessprofile"):
-            raise PermissionDenied("You must have a business profile to create products.")
-
-        serializer.save(business=user.businessprofile)
-
-    
-
 
 
 
@@ -175,19 +158,175 @@ class ProductViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
 
-        #Anonymous users - only public products
-
-        if not user.is_authenticated:
-            return Product.objects.filter(is_public=True)
-        
-        #Authenticated users:
-        # - see public products
-        # - see their own products (public or private)
-        return Product.objects.filter(
-            Q(is_public=True) |
-            Q(business_user=user)
+        queryset = Product.objects.select_related(
+            "business",
+            "business__school",
+            "business__user"
         )
 
+        if not user.is_authenticated:
+            return queryset.filter(is_private=False)
+
+        try:
+            user_school = user.userprofile.school
+        except UserProfile.DoesNotExist:
+            return queryset.filter(is_private=False)
+
+        filtered = queryset.filter(
+            Q(
+                is_private=False,
+                business__school=user_school
+            )
+            |
+            Q(business__user=user)
+        ).distinct()
+        
+        print("USER:", user)
+        print("USER SCHOOL:", user_school)
+        print("RESULT PRODUCTS:", list(filtered.values_list("name", flat=True)))
+    
+        return filtered
+
+
+
+
+
+    """
+    def get_queryset(self):
+        user = self.request.user
+       
+
+        queryset = Product.objects.select_related(
+            "business",
+            "business__school",
+            "business__user"
+        )
+        # anonymous users
+        if not user.is_authenticated:
+            return queryset.filter(is_private=False)
+
+        try:
+            user_school = user.userprofile.school
+        except UserProfile.DoesNotExist:
+            return queryset.filter(is_private=False)
+            
+        return queryset.filter(
+            Q(
+                is_private=False,
+                business__school=user_school
+            )
+            |
+            Q(business__user=user)
+        ).distinct()
+
+
+        min_price = self.request.query_params.get("min_price")
+        max_price = self.request.query_params.get("max_price")
+
+        if min_price:
+            queryset = queryset.filter(price__gte=min_price)
+
+        if max_price:
+            query = queryset.filter(price__lte=max_price)
+        
+        return queryset
+
+    """
+
+
+    
+
+    filter_backends = [DjangoFilterBackend, SearchFilter]
+
+    filterset_fields = [
+        "listing_type",
+        "business__category",
+        "is_available",
+    ]
+
+    search_fields = [
+        "name",
+        "description",
+        "business__name",
+        "business__category__name"
+    ]
+    
+    ordering_fields = ["price", "created_at"]
+    ordering = ["-created_at"]
+
+    def perform_create(self, serializer):
+        try:
+            business = self.request.user.businessprofile
+        except BusinessProfile.DoesNotExist:
+            raise PermissionDenied("You do not have a business profile.")
+
+        serializer.save(business=business)
+
+
+
+
+class ListingImageViewSet(viewsets.ModelViewSet):
+
+    serializer_class = ListingImageSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return ListingImage.objects.filter(product__business__user=self.request.user)
+       # return ListingImage.objects.all()
+
+    def perform_create(self, serializer):
+
+        product_id = self.request.data.get("product")
+
+        product = get_object_or_404(Product, id=product_id)
+
+        #product = Product.objects.get(id=product_id)
+
+        if product.business.user != self.request.user:
+            raise PermissionDenied("You cannot upload images to this listing.")
+
+        if product.images.count() >= 5:
+            raise PermissionDenied("Maximum 5 images allowed.")
+
+        serializer.save(product=product)
+
+
+
+
+class SchoolViewSet(ModelViewSet):
+    queryset = School.objects.all()
+    serializer_class = SchoolSerializer
+
+"""
+class ProductViewSet(viewsets.ModelViewSet):
+    serializer_class = ProductSerializer
+    permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
+
+
+    
+    def get_queryset(self):
+        user = self.request.user
+
+        if user.is_authenticated:
+            queryset = queryset.filter(
+                Q(is_private=False) |
+                Q(business__user=user)
+            ).distinct()
+        else:
+            queryset = queryset.filter(is_private=False)
+
+
+        
+
+
+        #Category filtering
+        category_id = self.request.query_params.get("category")
+        if category_id:
+            queryset.filter(business__category_id=category_id)
+
+        return Product.objects.filter(is_private=False)
+            
+        
     def perform_create(self, serializer):
        try:
         business = self.request.user.businessprofile
@@ -195,17 +334,6 @@ class ProductViewSet(viewsets.ModelViewSet):
         raise PermissionDenied("You do not have a business profile.")
 
 
+
        serializer.save(business=business)
-
-
-class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
-    serializer_class = ProductSerializer
-    permission_classes = [permissions.IsAuthenticated, IsBusinessOwnerOrReadOnly]
-    queryset = Product.objects.all()
-
-
-class ProductRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = Product.objects.all()
-    serializer_class = ProductSerializer
-    permission_classes = [IsBusinessOwnerOrReadOnly]
-
+       """
