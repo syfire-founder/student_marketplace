@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'rest_framework.authtoken',
     'users',
     'django_extensions',
+    'django_filters',
 ]
 
 MIDDLEWARE = [
@@ -130,7 +131,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
 
-'rest_framework_simplejwt.authentication.JWTAuthentication',
+'rest_framework.authentication.TokenAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
 
@@ -144,7 +145,11 @@ REST_FRAMEWORK = {
 'rest_framework.filters.SearchFilter',
 
 'rest_framework.filters.OrderingFilter',
-    ),        
+    ),
+    'DEFAULT_FILTER_BACKENDS': [
+
+'django_filters.rest_framework.DjangoFilterBackend'
+    ]  
 }
 
 
@@ -166,3 +171,9 @@ DATABASES = {
         "NAME": BASE_DIR / "db.sqlite3",
     }
 }
+
+
+
+
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"

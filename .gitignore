@@ -1,24 +1,21 @@
 # Python
-*.pyc
-*.pyo
 __pycache__/
-*.pyd
+*.py[cod]
+*.sqlite3
 
 # Virtual environment
 venv/
 env/
 
-# Django
-*.sqlite3
-*.log
+# Media uploads
 media/
-staticfiles/
+
+# Environment variables
+.env
 
 # VS Code
 .vscode/
 
-# MacOS
+# OS files
 .DS_Store
-
-# Windows
 Thumbs.db
