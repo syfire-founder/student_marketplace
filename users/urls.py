@@ -14,6 +14,7 @@ from .views import (
     ListingImageViewSet,
     BusinessProfileViewSet,
     CategoryListCreateView,
+    CategoryRetrieveUpdateDestroyView,
     SchoolViewSet
 )
 #BusinessProfileListCreateView
@@ -31,6 +32,12 @@ urlpatterns = [
 
     path('categories/', CategoryListCreateView.as_view(), name='category-list-create'),
     path('', include(router.urls)),
+
+    path(
+    "categories/<int:pk>/",
+    CategoryRetrieveUpdateDestroyView.as_view(),
+    name="category-detail",
+),
 ]
 
     #path('businesses/', BusinessProfileListCreateView.as_view(), name='business-list-create'),
