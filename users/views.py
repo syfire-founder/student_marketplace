@@ -24,7 +24,7 @@ from django.db.models import Q
 from django_filters.rest_framework import DjangoFilterBackend
 from .models import ListingImage
 from django.shortcuts import get_object_or_404
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAdminUser
 from .models import School
 from .serializers import SchoolSerializer
 
@@ -100,11 +100,20 @@ class CategoryListView(ListAPIView):
 class CategoryListCreateView(generics.ListCreateAPIView):
     queryset = Category.objects.all().order_by("id")
     serializer_class = CategorySerializer
-    permission_classes = [IsAuthenticated]
 
-class CategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [AllowAny()]
+        return [IsAdminUser()]
+
+class CategoryRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
+
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [AllowAny()]
+        return [IsAdminUser()]
 
 class CategoryRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Category.objects.all()
@@ -294,8 +303,13 @@ class ListingImageViewSet(viewsets.ModelViewSet):
 
 
 class SchoolViewSet(ModelViewSet):
-    queryset = School.objects.all()
+    queryset = School.objects.all().order_by("name")
     serializer_class = SchoolSerializer
+
+    def get_permissions(self):
+        if self.request.method in ["GET", "HEAD", "OPTIONS"]:
+            return [AllowAny()]
+        return [IsAdminUser()]
 
 """
 class ProductViewSet(viewsets.ModelViewSet):

@@ -10,6 +10,16 @@ class CategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
         fields = '__all__'
+
+    def validate_name(self, value):
+        value = value.strip().title()
+
+        if Category.objects.filter(name__iexact=value).exists():
+            raise serializers.ValidationError(
+                "A category with this name already exists."
+                )
+
+        return value
     
 class BusinessProfileSerializer(serializers.ModelSerializer):
     class Meta:

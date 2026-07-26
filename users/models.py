@@ -5,7 +5,7 @@ from django.dispatch import receiver
 
 
 class Category(models.Model):
-    name = models.CharField(max_length=100)
+    name = models.CharField(max_length=100, unique=True)
 
     def __str__(self):
         return self.name
@@ -17,7 +17,12 @@ class School(models.Model):
 
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
-    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    school = models.ForeignKey(
+    School,
+    on_delete=models.CASCADE,
+    null=True,
+    blank=True
+)
 
     def __str__(self):
         return f"{self.user.username} - {self.school.name}"
