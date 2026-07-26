@@ -2,6 +2,9 @@ from rest_framework.permissions import BasePermission, SAFE_METHODS
 from rest_framework import permissions
 
 
+
+
+
 class IsOwnerOrReadOnly(BasePermission):
     """
     Anyone can view products.
@@ -14,17 +17,28 @@ class IsOwnerOrReadOnly(BasePermission):
 
         return obj.business.user == request.user
 
-    
+
 class IsBusinessOwnerOrReadOnly(BasePermission):
     """
-    only the owner of the business can edit or delete its products.
-    anyone can read.
+    Anyone can read.
+    Only the owner of the business can edit/delete.
     """
+
     def has_object_permission(self, request, view, obj):
-        #safe methods like GET, HEAD, OPTIONS are always allowed for any authenticated user
-        if request.method in ['GET', 'HEAD', 'OPTIONS']:
+        if request.method in SAFE_METHODS:
             return True
-        #Only the owner of the business can edit/delete
+
         return obj.business.user == request.user
-    
-    
+
+
+class IsBusinessOwner(BasePermission):
+    """
+    Anyone can view a business profile.
+    Only the owner can modify it.
+    """
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+
+        return obj.user == request.user

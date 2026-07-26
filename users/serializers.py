@@ -30,14 +30,14 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         #user will come from the view
         return BusinessProfile.objects.create(**validated_data)
-    
+    """
     def validate(self, attrs):
         user = self.context['request'].user
         #only enforce on create not update
-        if self.instance is None and hasattr(user, "business"):
+        if self.instance is None and BusinessProfile.objects.filter(user=user).exists():
             raise serializers.ValidationError("User already has a business.")
         return attrs
-    
+    """
     
 
 

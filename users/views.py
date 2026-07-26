@@ -15,7 +15,7 @@ from rest_framework.authtoken.models import Token
 from rest_framework.response import Response
 from django.contrib.auth.models import User
 from .serializers import UserRegisterSerializer
-from .permisions import IsOwnerOrReadOnly, IsBusinessOwnerOrReadOnly
+from .permissions import IsOwnerOrReadOnly, IsBusinessOwnerOrReadOnly
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticatedOrReadOnly
 from rest_framework.viewsets import ModelViewSet
@@ -27,6 +27,8 @@ from django.shortcuts import get_object_or_404
 from rest_framework.permissions import AllowAny, IsAdminUser
 from .models import School
 from .serializers import SchoolSerializer
+from .permissions import IsBusinessOwner
+
 
 
 
@@ -45,39 +47,31 @@ class BusinessProfileDetailView(generics.RetrieveUpdateDestroyAPIView):
     
 
 class BusinessProfileViewSet(viewsets.ModelViewSet):
-    """
-    CRUD for a user's own business profile
-    -one profile per user
-    -ownership enforced
-    """
     serializer_class = BusinessProfileSerializer
-    permission_classes = [IsAuthenticated]
     filter_backends = [SearchFilter]
-    search_fields = ['name', 'description']
+    search_fields = ["name", "description"]
     ordering_fields = ["name", "id"]
     ordering = ["-id"]
-#only logged-in users can access
 
     def get_queryset(self):
-        #users can only see their own profile
-        return BusinessProfile.objects.filter(user=self.request.user)
-    
+        return BusinessProfile.objects.all()
+
+    def get_permissions(self):
+        if self.request.method in ["GET", "HEAD", "OPTIONS"]:
+            return [AllowAny()]
+
+        if self.request.method == "POST":
+            return [IsAuthenticated()]
+
+        return [IsAuthenticated(), IsBusinessOwner()]
+
     def perform_create(self, serializer):
-        #one profile per user - enforced at server level
         if BusinessProfile.objects.filter(user=self.request.user).exists():
-            raise ValidationError("you already have a business profile")
-        serializer.save(user=self.request.user)
+            raise ValidationError(
+                "You already have a business profile."
+            )
 
-    def get_object(self):
-        # restrict put/ patch/ delete to the users profile"
-        obj = super().get_object()
-        if obj.user != self.request.user:
-            raise ValidationError("you cannot access this profile(s)")
-        return obj
-    
-    def get_queryset(self):
-        #list only your own profile(S)
-        return BusinessProfile.objects.filter(user=self.request.user)
+        serializer.save(user=self.request.user)
     
 class BusinessProfileSearchViewSet(viewsets.ReadOnlyModelViewSet):
     """
