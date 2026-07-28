@@ -66,13 +66,28 @@ class BusinessProfileViewSet(viewsets.ModelViewSet):
         return [IsAuthenticated(), IsBusinessOwner()]
 
     def perform_create(self, serializer):
+        try:
+            profile = self.request.user.userprofile
+        except UserProfile.DoesNotExist:
+            raise ValidationError(
+                "Please complete your profile before creating a business profile."
+            )
+
+        if profile.school is None:
+            raise ValidationError(
+                "Please select your school before creating a business profile."
+            )
+
         if BusinessProfile.objects.filter(user=self.request.user).exists():
             raise ValidationError(
                 "You already have a business profile."
             )
 
-        serializer.save(user=self.request.user)
-    
+        serializer.save(
+            user=self.request.user,
+            school=profile.school
+        )
+
 class BusinessProfileSearchViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Allows searching other users' business profiles.
@@ -164,8 +179,10 @@ class ProductViewSet(viewsets.ModelViewSet):
         queryset = Product.objects.select_related(
             "business",
             "business__school",
-            "business__user"
-        )
+            "business__user",
+            ).prefetch_related(
+                "images"
+                )
 
         if not user.is_authenticated:
             return queryset.filter(is_private=False)
@@ -191,54 +208,6 @@ class ProductViewSet(viewsets.ModelViewSet):
         return filtered
 
 
-
-
-
-    """
-    def get_queryset(self):
-        user = self.request.user
-       
-
-        queryset = Product.objects.select_related(
-            "business",
-            "business__school",
-            "business__user"
-        )
-        # anonymous users
-        if not user.is_authenticated:
-            return queryset.filter(is_private=False)
-
-        try:
-            user_school = user.userprofile.school
-        except UserProfile.DoesNotExist:
-            return queryset.filter(is_private=False)
-            
-        return queryset.filter(
-            Q(
-                is_private=False,
-                business__school=user_school
-            )
-            |
-            Q(business__user=user)
-        ).distinct()
-
-
-        min_price = self.request.query_params.get("min_price")
-        max_price = self.request.query_params.get("max_price")
-
-        if min_price:
-            queryset = queryset.filter(price__gte=min_price)
-
-        if max_price:
-            query = queryset.filter(price__lte=max_price)
-        
-        return queryset
-
-    """
-
-
-    
-
     filter_backends = [DjangoFilterBackend, SearchFilter]
 
     filterset_fields = [
@@ -254,7 +223,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         "business__category__name"
     ]
     
-    ordering_fields = ["price", "created_at"]
+    ordering_fields = ["name", "price", "created_at"]
     ordering = ["-created_at"]
 
     def perform_create(self, serializer):
