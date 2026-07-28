@@ -3,7 +3,7 @@ from .models import BusinessProfile, Product
 from .models import ListingImage
 from .models import Category
 from django.contrib.auth.models import User
-from .models import School
+from .models import UserProfile, School
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -24,7 +24,7 @@ class CategorySerializer(serializers.ModelSerializer):
 class BusinessProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = BusinessProfile
-        fields = ['name', 'description', 'category', 'school',]
+        fields = ['id','name', 'description', 'category',]
         read_only_fields = ['id', "created_at"]
     
     def create(self, validated_data):
@@ -44,16 +44,35 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
 class UserRegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
 
+    # User chooses their school during registration
+    school = serializers.PrimaryKeyRelatedField(
+        queryset=School.objects.all(),
+        write_only=True
+    )
+
     class Meta:
         model = User
-        fields = ('username', 'email', 'password')
+        fields = (
+            "username",
+            "email",
+            "password",
+            "school",
+        )
 
     def create(self, validated_data):
+        school = validated_data.pop("school")
+
         user = User.objects.create_user(
-            username=validated_data['username'],
-            email=validated_data.get('email'),
-            password=validated_data['password']
+            username=validated_data["username"],
+            email=validated_data.get("email"),
+            password=validated_data["password"],
         )
+
+        UserProfile.objects.create(
+            user=user,
+            school=school
+        )
+
         return user
 
 class ListingImageSerializer(serializers.ModelSerializer):
@@ -72,7 +91,18 @@ class ProductSerializer(serializers.ModelSerializer):
     images = ListingImageSerializer(many=True, read_only=True)
     class Meta:
         model = Product
-        fields = "__all__"
+        fields = [
+    "id",
+    "listing_type",
+    "business",
+    "name",
+    "description",
+    "price",
+    "is_available",
+    "is_private",
+    "created_at",
+    "images",
+]
         read_only_fields = ["business"]
             
         
