@@ -1,6 +1,6 @@
 from django.contrib import admin
 from .models import BusinessProfile, Category, Product
-
+from .models import ProductFavorite, BusinessFollow
 
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
@@ -18,6 +18,9 @@ class ProductAdmin(admin.ModelAdmin):
     list_display = ("id", "name", "business", "price", "created_at")
     list_filter = ("business",)
 
+
+admin.site.register(ProductFavorite)
+admin.site.register(BusinessFollow)
     
 
 # Register your models here.

@@ -26,10 +26,11 @@ from .models import ListingImage
 from django.shortcuts import get_object_or_404
 from rest_framework.permissions import AllowAny, IsAdminUser
 from .models import School
-from .serializers import SchoolSerializer
+from .serializers import SchoolSerializer, UserProfileSerializer
 from .permissions import IsBusinessOwner
-
-
+from .serializers import ReviewSerializer
+from .models import Review
+from .permissions import IsReviewOwner
 
 
 
@@ -39,6 +40,14 @@ from .permissions import IsBusinessOwner
 
 
 # import here
+class UserProfileView(generics.RetrieveUpdateAPIView):
+    serializer_class = UserProfileSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user.userprofile
+
+
 class BusinessProfileDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = BusinessProfile.objects.all()
     serializer_class = BusinessProfileSerializer
@@ -66,6 +75,11 @@ class BusinessProfileViewSet(viewsets.ModelViewSet):
         return [IsAuthenticated(), IsBusinessOwner()]
 
     def perform_create(self, serializer):
+        if BusinessProfile.objects.filter(user=self.request.user).exists():
+            raise ValidationError(
+                "You already have a business profile."
+            )
+
         try:
             profile = self.request.user.userprofile
         except UserProfile.DoesNotExist:
@@ -76,11 +90,6 @@ class BusinessProfileViewSet(viewsets.ModelViewSet):
         if profile.school is None:
             raise ValidationError(
                 "Please select your school before creating a business profile."
-            )
-
-        if BusinessProfile.objects.filter(user=self.request.user).exists():
-            raise ValidationError(
-                "You already have a business profile."
             )
 
         serializer.save(
@@ -247,18 +256,28 @@ class ListingImageViewSet(viewsets.ModelViewSet):
        # return ListingImage.objects.all()
 
     def perform_create(self, serializer):
-
+        
         product_id = self.request.data.get("product")
 
-        product = get_object_or_404(Product, id=product_id)
+        if not product_id:
+            raise ValidationError(
+                "Product is required."
+            )
 
-        #product = Product.objects.get(id=product_id)
+        product = get_object_or_404(
+            Product,
+            id=product_id
+        )
 
         if product.business.user != self.request.user:
-            raise PermissionDenied("You cannot upload images to this listing.")
-
+            raise PermissionDenied(
+                "You cannot upload images to this listing."
+            )
+        
         if product.images.count() >= 5:
-            raise PermissionDenied("Maximum 5 images allowed.")
+            raise ValidationError(
+                "Maximum 5 images allowed."
+            )
 
         serializer.save(product=product)
 
@@ -273,6 +292,35 @@ class SchoolViewSet(ModelViewSet):
         if self.request.method in ["GET", "HEAD", "OPTIONS"]:
             return [AllowAny()]
         return [IsAdminUser()]
+
+
+
+class ReviewViewSet(viewsets.ModelViewSet):
+    serializer_class = ReviewSerializer
+    queryset = Review.objects.select_related(
+        "user",
+        "business"
+    )
+
+    def get_permissions(self):
+        if self.request.method in ["GET", "HEAD", "OPTIONS"]:
+            return [AllowAny()]
+
+        if self.request.method == "POST":
+            return [IsAuthenticated()]
+
+        return [IsAuthenticated(), IsReviewOwner()]
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+
+
+
+
+
+
 
 """
 class ProductViewSet(viewsets.ModelViewSet):

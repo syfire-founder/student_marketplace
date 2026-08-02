@@ -42,3 +42,15 @@ class IsBusinessOwner(BasePermission):
             return True
 
         return obj.user == request.user
+
+
+class IsReviewOwner(BasePermission):
+    """
+    Only the owner of a review can edit or delete it.
+    """
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+
+        return obj.user == request.user
