@@ -15,7 +15,9 @@ from .views import (
     BusinessProfileViewSet,
     CategoryListCreateView,
     CategoryRetrieveUpdateDestroyView,
-    SchoolViewSet
+    SchoolViewSet,
+    UserProfileView,
+    ReviewViewSet,
 )
 #BusinessProfileListCreateView
 #BusinessProfileDetailView,
@@ -25,7 +27,11 @@ router.register(r'products', ProductViewSet, basename='product')
 router.register(r'listing-images', ListingImageViewSet, basename='listing-images')
 router.register(r'businessprofiles', BusinessProfileViewSet, basename='businessprofile')
 router.register(r'schools', SchoolViewSet, basename='school')
-
+router.register(
+    r"reviews",
+    ReviewViewSet,
+    basename="review"
+)
 urlpatterns = [
     path('auth/register/', RegisterView.as_view(), name='register'),
     path('auth/login/', obtain_auth_token, name='login'),
@@ -37,6 +43,12 @@ urlpatterns = [
     "categories/<int:pk>/",
     CategoryRetrieveUpdateDestroyView.as_view(),
     name="category-detail",
+),
+    
+    path(
+    "profile/",
+    UserProfileView.as_view(),
+    name="user-profile",
 ),
 ]
 
