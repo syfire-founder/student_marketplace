@@ -31,14 +31,26 @@ from .permissions import IsBusinessOwner
 from .serializers import ReviewSerializer
 from .models import Review
 from .permissions import IsReviewOwner
-
-
-
-
-
-
-
-
+from rest_framework.views import APIView
+from django.db.models import Avg
+from .models import ProductFavorite
+from .serializers import BusinessDashboardSerializer
+from .models import ProductView
+from django.db.models import Count
+from .models import Review
+from django.utils import timezone
+from datetime import timedelta
+from rest_framework import status, viewsets
+from django.db.models import Count
+from django.shortcuts import get_object_or_404
+from .models import Conversation, Message, BusinessFollow
+from .serializers import ConversationSerializer, MessageSerializer
+from .utils import create_notification
+from .serializers import ProductFavoriteSerializer
+from .serializers import BusinessFollowSerializer
+from .utils import create_notification
+from .models import Notification
+from .serializers import NotificationSerializer
 # import here
 class UserProfileView(generics.RetrieveUpdateAPIView):
     serializer_class = UserProfileSerializer
@@ -243,6 +255,18 @@ class ProductViewSet(viewsets.ModelViewSet):
 
         serializer.save(business=business)
 
+    def retrieve(self, request, *args, **kwargs):
+        product = self.get_object()
+
+        ProductView.objects.create(
+            product=product,
+            user=request.user if request.user.is_authenticated else None
+        )
+
+        serializer = self.get_serializer(product)
+
+        return Response(serializer.data)
+
 
 
 
@@ -315,50 +339,319 @@ class ReviewViewSet(viewsets.ModelViewSet):
         serializer.save(user=self.request.user)
 
 
+class BusinessDashboardView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            business = request.user.businessprofile
+        except BusinessProfile.DoesNotExist:
+            raise ValidationError(
+                "You do not have a business profile."
+            )
+
+        top_products = (
+            business.products
+            .annotate(view_count=Count("views"))
+            .order_by("-view_count", "-created_at")[:5]
+        )
+
+        last_week = timezone.now() - timedelta(days=7)
+
+        trending_products = (
+            business.products
+            .annotate(
+                views_last_7_days=Count(
+                    "views",
+                    filter=Q(
+                        views__viewed_at__gte=last_week
+                        )
+                    )
+                )
+                .order_by("-views_last_7_days")[:5]
+            )
+
+        recent_reviews = (
+            Review.objects
+            .filter(business=business)
+            .select_related("user")
+            .order_by("-created_at")[:5]
+        )
+
+        data = {
+            "business": business.name,
+            "followers": business.followers.count(),
+            "products": business.products.count(),
+            "reviews": Review.objects.filter(
+                business=business
+            ).count(),
+            "average_rating": (
+                Review.objects.filter(
+                    business=business
+                ).aggregate(
+                    Avg("rating")
+                )["rating__avg"] or 0
+            ),
+            "favorites": ProductFavorite.objects.filter(
+                product__business=business
+            ).count(),
+            "total_views": ProductView.objects.filter(
+                product__business=business
+            ).count(),
+            "top_products": [
+                {
+                    "id": product.id,
+                    "name": product.name,
+                    "views": product.view_count,
+                }
+                for product in top_products
+            ],
+            "trending_products": [
+                {
+                    "id": product.id,
+                    "name": product.name,
+                    "views_last_7_days": product.views_last_7_days,
+                    }
+                    for product in trending_products
+                ],
+            "recent_reviews": [
+                {
+                    "user": review.user.username,
+                    "rating": review.rating,
+                    "comment": review.comment,
+                    "created_at": review.created_at,
+                }
+                for review in recent_reviews
+                ],
+        }
+
+        serializer = BusinessDashboardSerializer(instance=data)
+
+        return Response(serializer.data)
 
 
+class ConversationViewSet(viewsets.ModelViewSet):
+    serializer_class = ConversationSerializer
+    permission_classes = [IsAuthenticated]
 
-
-
-
-
-"""
-class ProductViewSet(viewsets.ModelViewSet):
-    serializer_class = ProductSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
-
-
-    
     def get_queryset(self):
-        user = self.request.user
+        return (
+            Conversation.objects
+            .filter(participants=self.request.user)
+            .prefetch_related("participants")
+            .order_by("-updated_at")
+        )
 
-        if user.is_authenticated:
-            queryset = queryset.filter(
-                Q(is_private=False) |
-                Q(business__user=user)
-            ).distinct()
-        else:
-            queryset = queryset.filter(is_private=False)
+    def create(self, request, *args, **kwargs):
+        participant_ids = request.data.get("participants", [])
 
+        if len(participant_ids) != 1:
+            raise ValidationError(
+                "Provide exactly one user to start a conversation."
+            )
 
-        
+        other_user = get_object_or_404(
+            User,
+            id=participant_ids[0]
+        )
 
+        if other_user == request.user:
+            raise ValidationError(
+                "You cannot start a conversation with yourself."
+            )
 
-        #Category filtering
-        category_id = self.request.query_params.get("category")
-        if category_id:
-            queryset.filter(business__category_id=category_id)
+        existing = (
+            Conversation.objects
+            .filter(participants=request.user)
+            .filter(participants=other_user)
+            .annotate(num_participants=Count("participants"))
+            .filter(num_participants=2)
+            .first()
+        )
 
-        return Product.objects.filter(is_private=False)
-            
-        
+        if existing:
+            serializer = self.get_serializer(existing)
+            return Response(serializer.data)
+
+        conversation = Conversation.objects.create()
+
+        conversation.participants.add(
+            request.user,
+            other_user
+        )
+
+        serializer = self.get_serializer(conversation)
+
+        return Response(
+            serializer.data,
+            status=status.HTTP_201_CREATED
+        )
+
+class MessageViewSet(viewsets.ModelViewSet):
+    serializer_class = MessageSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return (
+            Message.objects
+            .filter(conversation__participants=self.request.user)
+            .select_related("sender", "conversation")
+            .order_by("created_at")
+        )
+
     def perform_create(self, serializer):
-       try:
-        business = self.request.user.businessprofile
-       except:
-        raise PermissionDenied("You do not have a business profile.")
+        conversation_id = self.request.data.get("conversation")
+
+        conversation = get_object_or_404(
+            Conversation,
+            id=conversation_id
+        )
+
+        if not conversation.has_participant(self.request.user):
+            raise PermissionDenied(
+                "You are not a participant in this conversation."
+            )
+
+        message = serializer.save(
+            sender=self.request.user,
+            conversation=conversation
+            )
+            #
+        print("Sender:", self.request.user)
+
+        recipient = conversation.participants.exclude(
+            id=self.request.user.id
+            ).first()
+        print("Recipient:", recipient)
+
+        create_notification(
+            recipient=recipient,
+            sender=self.request.user,
+            notification_type=Notification.MESSAGE,
+            message=f"{self.request.user.username} sent you a message."
+            )
+        print("Notification attempted")
+
+    def perform_update(self, serializer):
+        if serializer.instance.sender != self.request.user:
+            raise PermissionDenied(
+                "You can only edit your own messages."
+            )
+
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if instance.sender != self.request.user:
+            raise PermissionDenied(
+                "You can only delete your own messages."
+            )
+
+        instance.delete()
 
 
 
-       serializer.save(business=business)
-       """
+class ProductFavoriteViewSet(viewsets.ModelViewSet):
+    serializer_class = ProductFavoriteSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return ProductFavorite.objects.filter(
+            user=self.request.user
+        ).select_related("product")
+
+    def perform_create(self, serializer):
+        product_id = self.request.data.get("product")
+
+        product = get_object_or_404(
+            Product,
+            id=product_id
+        )
+
+        if ProductFavorite.objects.filter(
+            user=self.request.user,
+            product=product
+        ).exists():
+            raise ValidationError(
+                "You have already favorited this product."
+            )
+
+        serializer.save(
+            user=self.request.user,
+            product=product
+        )
+
+class BusinessFollowViewSet(viewsets.ModelViewSet):
+    serializer_class = BusinessFollowSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return BusinessFollow.objects.filter(
+            user=self.request.user
+        ).select_related("business")
+
+    def perform_create(self, serializer):
+        business_id = self.request.data.get("business")
+
+        business = get_object_or_404(
+            BusinessProfile,
+            id=business_id
+        )
+
+        if business.user == self.request.user:
+            raise ValidationError(
+                "You cannot follow your own business."
+            )
+
+        if BusinessFollow.objects.filter(
+            user=self.request.user,
+            business=business
+        ).exists():
+            raise ValidationError(
+                "You are already following this business."
+            )
+
+        follow = serializer.save(
+            user=self.request.user,
+            business=business
+        )
+
+        create_notification(
+            recipient=business.user,
+            sender=self.request.user,
+            notification_type=Notification.FOLLOW,
+            message=f"{self.request.user.username} followed your business."
+        )
+
+
+
+
+class NotificationViewSet(viewsets.ModelViewSet):
+    serializer_class = NotificationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Notification.objects.filter(
+            recipient=self.request.user
+        ).select_related("sender")
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve", "partial_update"]:
+            return [IsAuthenticated()]
+        return [IsAdminUser()]
+
+    def perform_update(self, serializer):
+        serializer.save()
+
+
+class UnreadNotificationCountView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        count = Notification.objects.filter(
+            recipient=request.user,
+            is_read=False
+        ).count()
+
+        return Response({
+            "unread_count": count
+        })

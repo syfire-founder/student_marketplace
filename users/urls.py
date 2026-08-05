@@ -18,6 +18,13 @@ from .views import (
     SchoolViewSet,
     UserProfileView,
     ReviewViewSet,
+    BusinessDashboardView,
+    ConversationViewSet,
+    MessageViewSet,
+    ProductFavoriteViewSet,
+    BusinessFollowViewSet,
+    NotificationViewSet,
+    UnreadNotificationCountView,
 )
 #BusinessProfileListCreateView
 #BusinessProfileDetailView,
@@ -32,9 +39,42 @@ router.register(
     ReviewViewSet,
     basename="review"
 )
+router.register(
+    r"conversations",
+    ConversationViewSet,
+    basename="conversation"
+)
+
+router.register(
+    r"messages",
+    MessageViewSet,
+    basename="message"
+)
+
+router.register(
+    r"product-favorites",
+    ProductFavoriteViewSet,
+    basename="product-favorite"
+)
+
+router.register(
+    r"business-follows",
+    BusinessFollowViewSet,
+    basename="business-follow"
+)
+router.register(
+    r"notifications",
+    NotificationViewSet,
+    basename="notification"
+)
 urlpatterns = [
     path('auth/register/', RegisterView.as_view(), name='register'),
     path('auth/login/', obtain_auth_token, name='login'),
+
+    path(
+    "notifications/unread-count/",
+    UnreadNotificationCountView.as_view(),
+),
 
     path('categories/', CategoryListCreateView.as_view(), name='category-list-create'),
     path('', include(router.urls)),
@@ -49,6 +89,11 @@ urlpatterns = [
     "profile/",
     UserProfileView.as_view(),
     name="user-profile",
+),
+
+    path(
+    "business-dashboard/",
+    BusinessDashboardView.as_view(),
 ),
 ]
 

@@ -8,7 +8,9 @@ from .models import (
     ProductFavorite,
     BusinessFollow,
 )
-from .models import Review
+from .models import Review, Notification
+from django.db.models import Avg
+from .models import Conversation, Message
 
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
@@ -238,6 +240,16 @@ class BusinessFollowSerializer(serializers.ModelSerializer):
         ]
 
 class UserProfileSerializer(serializers.ModelSerializer):
+    user_id = serializers.IntegerField(
+        source="user.id",
+        read_only=True
+    )
+
+    username = serializers.CharField(
+        source="user.username",
+        read_only=True
+    )
+
     school_name = serializers.CharField(
         source="school.name",
         read_only=True
@@ -247,11 +259,15 @@ class UserProfileSerializer(serializers.ModelSerializer):
         model = UserProfile
         fields = [
             "id",
+            "user_id",
+            "username",
             "school",
             "school_name",
         ]
         read_only_fields = [
             "id",
+            "user_id",
+            "username",
             "school_name",
         ]
 
@@ -316,4 +332,115 @@ class ReviewSerializer(serializers.ModelSerializer):
            )
 
         return attrs
+
+
+
+class BusinessDashboardSerializer(serializers.Serializer):
+    business = serializers.CharField()
+    followers = serializers.IntegerField()
+    products = serializers.IntegerField()
+    reviews = serializers.IntegerField()
+    average_rating = serializers.FloatField()
+    favorites = serializers.IntegerField()
+    total_views = serializers.IntegerField()
+    top_products = serializers.ListField()
+    trending_products = serializers.ListField(read_only=True)
+    recent_reviews = serializers.ListField()
+
+
+class ConversationSerializer(serializers.ModelSerializer):
+    participants = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=User.objects.all()
+    )
+
+    class Meta:
+        model = Conversation
+        fields = [
+            "id",
+            "participants",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "updated_at",
+        ]
+
+class MessageSerializer(serializers.ModelSerializer):
+    sender = serializers.StringRelatedField(read_only=True)
+
+    class Meta:
+        model = Message
+        fields = [
+            "id",
+            "conversation",
+            "sender",
+            "text",
+            "is_read",
+            "created_at",
+        ]
+        read_only_fields = [
+            "id",
+            "sender",
+            "is_read",
+            "created_at",
+        ]
+
+class ProductFavoriteSerializer(serializers.ModelSerializer):
+    user = serializers.StringRelatedField(read_only=True)
+
+    class Meta:
+        model = ProductFavorite
+        fields = [
+            "id",
+            "user",
+            "product",
+            "created_at",
+        ]
+        read_only_fields = [
+            "id",
+            "user",
+            "created_at",
+        ]
+
+        
+class BusinessFollowSerializer(serializers.ModelSerializer):
+    user = serializers.StringRelatedField(read_only=True)
+
+    class Meta:
+        model = BusinessFollow
+        fields = [
+            "id",
+            "user",
+            "business",
+            "created_at",
+        ]
+        read_only_fields = [
+            "id",
+            "user",
+            "created_at",
+        ]
+
+class NotificationSerializer(serializers.ModelSerializer):
+    sender = serializers.StringRelatedField(read_only=True)
+
+    class Meta:
+        model = Notification
+        fields = [
+            "id",
+            "sender",
+            "notification_type",
+            "message",
+            "is_read",
+            "created_at",
+        ]
+        read_only_fields = [
+            "id",
+            "sender",
+            "notification_type",
+            "message",
+            "created_at",
+        ]
 #Don't allow clients to set business
