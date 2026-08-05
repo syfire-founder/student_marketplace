@@ -215,6 +215,129 @@ class BusinessFollow(models.Model):
         return f"{self.user.username} follows {self.business.name}"
 
 
+class ProductView(models.Model):
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="views"
+    )
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="product_views"
+    )
+
+    viewed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-viewed_at"]
+
+    def __str__(self):
+        username = self.user.username if self.user else "Anonymous"
+        return f"{username} viewed {self.product.name}"
+
+class Conversation(models.Model):
+    participants = models.ManyToManyField(
+        User,
+        related_name="conversations"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def has_participant(self, user):
+        return self.participants.filter(id=user.id).exists()
+
+    def __str__(self):
+        usernames = ", ".join(
+            self.participants.values_list(
+                "username",
+                flat=True
+            )
+        )
+        return usernames
+
+
+class Message(models.Model):
+    conversation = models.ForeignKey(
+        Conversation,
+        on_delete=models.CASCADE,
+        related_name="messages"
+    )
+
+    sender = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="sent_messages"
+    )
+
+    text = models.TextField()
+
+    is_read = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+
+        self.conversation.save(update_fields=["updated_at"])
+
+    def __str__(self):
+        return f"{self.sender.username}: {self.text[:30]}"
+
+
+class Notification(models.Model):
+    
+    FAVORITE = "favorite"
+    FOLLOW = "follow"
+    REVIEW = "review"
+    MESSAGE = "message"
+
+    NOTIFICATION_TYPES = [
+        (FAVORITE, "Favorite"),
+        (FOLLOW, "Follow"),
+        (REVIEW, "Review"),
+        (MESSAGE, "Message"),
+    ]
+
+    recipient = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="notifications"
+    )
+
+    sender = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="sent_notifications"
+    )
+
+    notification_type = models.CharField(
+        max_length=20,
+        choices=NOTIFICATION_TYPES
+    )
+
+    message = models.CharField(max_length=255)
+
+    is_read = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.sender} -> {self.recipient}"
+
+
+
+
 
 
 
