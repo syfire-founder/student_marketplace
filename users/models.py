@@ -160,12 +160,6 @@ class Review(models.Model):
     def __str__(self):
         return f"{self.user.username} - {self.business.name} ({self.rating})"
 
-"""
-@receiver(post_save, sender=User)
-def create_user_profile(sender, instance, created, **kwargs):
-    if created:
-        UserProfile.objects.create(user=instance)
-"""
 
 @receiver(post_save, sender=User)
 def save_user_profile(sender, instance, **kwargs):
@@ -346,32 +340,49 @@ class Notification(models.Model):
     def __str__(self):
         return f"{self.sender} -> {self.recipient}"
 
+class Report(models.Model):
+    PRODUCT = "product"
+    BUSINESS = "business"
 
+    REPORT_TYPES = [
+        (PRODUCT, "Product"),
+        (BUSINESS, "Business"),
+    ]
 
+    reporter = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="reports"
+    )
 
+    report_type = models.CharField(
+        max_length=20,
+        choices=REPORT_TYPES
+    )
 
-
-
-
-"""
-class Product(models.Model):
-    is_private = models.BooleanField(default=False, db_index=True)
+    product = models.ForeignKey(
+        Product,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE
+    )
 
     business = models.ForeignKey(
         BusinessProfile,
-        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE
     )
-    name = models.CharField(max_length=255)
-    price = models.DecimalField(max_digits=10, decimal_places=2)
-    created_at = models.DateTimeField(auto_now_add=True)
 
-    class Meta:
-        ordering = ["-created_at"]  # avoids pagination warning
+    reason = models.TextField()
+
+    created_at = models.DateTimeField(
+        auto_now_add=True
+    )
 
     def __str__(self):
-        return self.name
+        return f"{self.reporter.username} reported {self.report_type}"
 
-"""
 
     
     

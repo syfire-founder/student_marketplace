@@ -26,6 +26,9 @@ from .views import (
     NotificationViewSet,
     UnreadNotificationCountView,
     SearchView,
+    HomeFeedView,
+    RecentlyViewedView,
+    ReportViewSet,
 )
 #BusinessProfileListCreateView
 #BusinessProfileDetailView,
@@ -68,6 +71,11 @@ router.register(
     NotificationViewSet,
     basename="notification"
 )
+router.register(
+    r"reports",
+    ReportViewSet,
+    basename="report"
+)
 urlpatterns = [
     path('auth/register/', RegisterView.as_view(), name='register'),
     path('auth/login/', obtain_auth_token, name='login'),
@@ -101,6 +109,16 @@ urlpatterns = [
     "search/",
     SearchView.as_view(),
     name="search",
+),
+    
+    path(
+    "feed/",
+    HomeFeedView.as_view(),
+),
+
+    path(
+    "recently-viewed/",
+    RecentlyViewedView.as_view(),
 ),
 ]
 
