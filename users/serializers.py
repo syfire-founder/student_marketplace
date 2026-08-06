@@ -10,7 +10,7 @@ from .models import (
 )
 from .models import Review, Notification
 from django.db.models import Avg
-from .models import Conversation, Message
+from .models import Conversation, Message, ProductView, Report
 
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
@@ -448,4 +448,57 @@ class NotificationSerializer(serializers.ModelSerializer):
 class SearchSerializer(serializers.Serializer):
     products = ProductSerializer(many=True)
     businesses = BusinessProfileSerializer(many=True)
-#Don't allow clients to set business
+
+
+class HomeFeedSerializer(serializers.Serializer):
+    recommended = ProductSerializer(many=True)
+    popular = ProductSerializer(many=True)
+    new_arrivals = ProductSerializer(many=True)
+    following = ProductSerializer(many=True)
+
+class RecentlyViewedSerializer(serializers.ModelSerializer):
+    product = ProductSerializer(read_only=True)
+
+    class Meta:
+        model = ProductView
+        fields = [
+            "id",
+            "product",
+            "viewed_at",
+        ]
+
+class ReportSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Report
+        fields = [
+            "id",
+            "report_type",
+            "product",
+            "business",
+            "reason",
+            "created_at",
+        ]
+
+        read_only_fields = [
+            "id",
+            "created_at",
+        ]
+
+    def validate(self, attrs):
+        report_type = attrs.get("report_type")
+        product = attrs.get("product")
+        business = attrs.get("business")
+
+        if report_type == Report.PRODUCT and not product:
+            raise serializers.ValidationError(
+                "A product report must include a product."
+            )
+
+        if report_type == Report.BUSINESS and not business:
+            raise serializers.ValidationError(
+                "A business report must include a business."
+            )
+
+        return attrs
+
+ 

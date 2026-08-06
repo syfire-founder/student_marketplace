@@ -50,7 +50,11 @@ from .serializers import ProductFavoriteSerializer
 from .serializers import BusinessFollowSerializer
 from .utils import create_notification
 from .models import Notification
-from .serializers import NotificationSerializer, SearchSerializer
+from .serializers import NotificationSerializer, SearchSerializer, HomeFeedSerializer, RecentlyViewedSerializer
+from .pagination import MarketplacePagination
+from .models import Report
+from .serializers import ReportSerializer
+
 # import here
 class UserProfileView(generics.RetrieveUpdateAPIView):
     serializer_class = UserProfileSerializer
@@ -69,6 +73,7 @@ class BusinessProfileDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 class BusinessProfileViewSet(viewsets.ModelViewSet):
     serializer_class = BusinessProfileSerializer
+    pagination_class = MarketplacePagination
     filter_backends = [SearchFilter]
     search_fields = ["name", "description"]
     ordering_fields = ["name", "id"]
@@ -192,6 +197,7 @@ class RegisterView(generics.CreateAPIView):
 class ProductViewSet(viewsets.ModelViewSet):
     serializer_class = ProductSerializer
     permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
+    pagination_class = MarketplacePagination
 
 
     def get_queryset(self):
@@ -325,6 +331,7 @@ class ReviewViewSet(viewsets.ModelViewSet):
         "user",
         "business"
     )
+    pagination_class = MarketplacePagination
 
     def get_permissions(self):
         if self.request.method in ["GET", "HEAD", "OPTIONS"]:
@@ -433,6 +440,7 @@ class BusinessDashboardView(APIView):
 class ConversationViewSet(viewsets.ModelViewSet):
     serializer_class = ConversationSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = MarketplacePagination
 
     def get_queryset(self):
         return (
@@ -490,6 +498,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
 class MessageViewSet(viewsets.ModelViewSet):
     serializer_class = MessageSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = MarketplacePagination
 
     def get_queryset(self):
         return (
@@ -553,6 +562,7 @@ class MessageViewSet(viewsets.ModelViewSet):
 class ProductFavoriteViewSet(viewsets.ModelViewSet):
     serializer_class = ProductFavoriteSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = MarketplacePagination
 
     def get_queryset(self):
         return ProductFavorite.objects.filter(
@@ -583,6 +593,7 @@ class ProductFavoriteViewSet(viewsets.ModelViewSet):
 class BusinessFollowViewSet(viewsets.ModelViewSet):
     serializer_class = BusinessFollowSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = MarketplacePagination
 
     def get_queryset(self):
         return BusinessFollow.objects.filter(
@@ -628,6 +639,7 @@ class BusinessFollowViewSet(viewsets.ModelViewSet):
 class NotificationViewSet(viewsets.ModelViewSet):
     serializer_class = NotificationSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = MarketplacePagination
 
     def get_queryset(self):
         return Notification.objects.filter(
@@ -660,39 +672,187 @@ class SearchView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        # 1. Read query parameters
         query = request.query_params.get("q", "").strip()
+        category = request.query_params.get("category")
+        listing_type = request.query_params.get("listing_type")
+        min_price = request.query_params.get("min_price")
+        max_price = request.query_params.get("max_price")
+        ordering = request.query_params.get("ordering")
+
+        # 2. Get the user's school
         try:
             school = request.user.userprofile.school
         except UserProfile.DoesNotExist:
             return Response(
                 {"detail": "User profile not found."},
                 status=404
-                )
+             )
 
         if school is None:
             return Response(
                 {"detail": "Please select a school first."},
                 status=400
-                )
+            )
 
-        school = request.user.userprofile.school
-
+        # 3. Base queryset
         products = Product.objects.filter(
             business__school=school,
-            name__icontains=query,
+            is_private=False,
+            is_available=True,
         )
 
+        # 4. Search text
+        if query:
+            products = products.filter(
+                Q(name__icontains=query) |
+                Q(description__icontains=query) |
+                Q(category__name__icontains=query) |
+                Q(business__name__icontains=query)
+            )
+
+        # 5. Extra filters
+        if category:
+            products = products.filter(category_id=category)
+
+        if listing_type:
+            products = products.filter(listing_type=listing_type)
+
+        if min_price:
+            products = products.filter(price__gte=min_price)
+
+        if max_price:
+            products = products.filter(price__lte=max_price)
+
+        allowed_ordering = [
+            "price",
+            "-price",
+            "created_at",
+            "-created_at",
+        ]
+
+        if ordering in allowed_ordering:
+            products = products.order_by(ordering)
+        else:
+            products = products.order_by("-created_at")
+        # 6. Businesses
         businesses = BusinessProfile.objects.filter(
-            school=school,
-            name__icontains=query,
+            school=school
         )
+        if query:
+            businesses = businesses.filter(
+                Q(name__icontains=query) |
+                Q(description__icontains=query) |
+                Q(category__name__icontains=query)
+            )
+
+        # 7. Return response
         serializer = SearchSerializer({
-            "products": products,
-            "businesses": businesses,
+            "products": products.distinct(),
+            "businesses": businesses.distinct(),
         })
 
         return Response(serializer.data)
 
+
+class HomeFeedView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            school = request.user.userprofile.school
+        except UserProfile.DoesNotExist:
+            return Response(
+                {"detail": "User profile not found."},
+                status=404
+            )
+
+        if school is None:
+            return Response(
+                {"detail": "Please select a school first."},
+                status=400
+            )
+        products = Product.objects.filter(
+            business__school=school,
+            is_available=True,
+            is_private=False
+            )
+        new_arrivals = products.order_by("-created_at")[:10]
+        popular = (
+            products
+            .annotate(
+                num_views=Count("views")
+            )
+            .order_by("-num_views", "-created_at")[:10]
+        )
+        followed_businesses = BusinessFollow.objects.filter(
+            user=request.user
+            ).values_list(
+                "business_id",
+                flat=True
+            )
+
+        following = products.filter(
+            business_id__in=followed_businesses
+        ).order_by("-created_at")[:10]
+
+        recommended = (
+            products
+            .annotate(
+                avg_rating=Avg("business__reviews__rating"),
+                num_views=Count("views", distinct=True),
+            )
+            .order_by(
+                "-avg_rating",
+                "-num_views",
+                "-created_at",
+            )[:10]
+        )
+        
+        serializer = HomeFeedSerializer({
+            "recommended": recommended,
+            "popular": popular,
+            "new_arrivals": new_arrivals,
+            "following": following,
+        })
+        
+        return Response(serializer.data)
+
+class RecentlyViewedView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        views = (
+            ProductView.objects
+            .filter(user=request.user)
+            .select_related(
+                "product",
+                "product__business",
+                "product__category",
+            )
+            .order_by("-viewed_at")
+        )
+
+        serializer = RecentlyViewedSerializer(
+            views,
+            many=True
+        )
+
+        return Response(serializer.data)
+
+class ReportViewSet(viewsets.ModelViewSet):
+    serializer_class = ReportSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Report.objects.filter(
+            reporter=self.request.user
+        )
+
+    def perform_create(self, serializer):
+        serializer.save(
+            reporter=self.request.user
+        )
 """
 
 class SearchView(APIView):
