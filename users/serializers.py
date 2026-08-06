@@ -144,13 +144,14 @@ class ProductSerializer(serializers.ModelSerializer):
         read_only=True
     )
 
-    category = serializers.IntegerField(
-        source="business.category.id",
-        read_only=True
+    category = serializers.PrimaryKeyRelatedField(
+        queryset=Category.objects.all(),
+        required=False,
+        allow_null=True
     )
 
     category_name = serializers.CharField(
-        source="business.category.name",
+        source="category.name",
         read_only=True
     )
 
@@ -443,4 +444,8 @@ class NotificationSerializer(serializers.ModelSerializer):
             "message",
             "created_at",
         ]
+
+class SearchSerializer(serializers.Serializer):
+    products = ProductSerializer(many=True)
+    businesses = BusinessProfileSerializer(many=True)
 #Don't allow clients to set business

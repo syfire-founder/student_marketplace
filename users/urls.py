@@ -25,6 +25,7 @@ from .views import (
     BusinessFollowViewSet,
     NotificationViewSet,
     UnreadNotificationCountView,
+    SearchView,
 )
 #BusinessProfileListCreateView
 #BusinessProfileDetailView,
@@ -94,6 +95,12 @@ urlpatterns = [
     path(
     "business-dashboard/",
     BusinessDashboardView.as_view(),
+),
+    
+    path(
+    "search/",
+    SearchView.as_view(),
+    name="search",
 ),
 ]
 
