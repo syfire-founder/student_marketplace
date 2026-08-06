@@ -71,6 +71,14 @@ class Product(models.Model):
         related_name="products"
     )
 
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="products"
+    )
+
     name = models.CharField(max_length=255)
 
     description = models.TextField(blank=True)
@@ -81,9 +89,13 @@ class Product(models.Model):
         null=True,
         blank=True
     )
+
     is_available = models.BooleanField(default=True)
 
-    is_private = models.BooleanField(default=False, db_index=True)
+    is_private = models.BooleanField(
+        default=False,
+        db_index=True
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -92,7 +104,6 @@ class Product(models.Model):
 
     def __str__(self):
         return self.name
-
 
 
 class ListingImage(models.Model):

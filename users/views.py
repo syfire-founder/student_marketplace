@@ -50,7 +50,7 @@ from .serializers import ProductFavoriteSerializer
 from .serializers import BusinessFollowSerializer
 from .utils import create_notification
 from .models import Notification
-from .serializers import NotificationSerializer
+from .serializers import NotificationSerializer, SearchSerializer
 # import here
 class UserProfileView(generics.RetrieveUpdateAPIView):
     serializer_class = UserProfileSerializer
@@ -655,3 +655,101 @@ class UnreadNotificationCountView(APIView):
         return Response({
             "unread_count": count
         })
+
+class SearchView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        query = request.query_params.get("q", "").strip()
+        try:
+            school = request.user.userprofile.school
+        except UserProfile.DoesNotExist:
+            return Response(
+                {"detail": "User profile not found."},
+                status=404
+                )
+
+        if school is None:
+            return Response(
+                {"detail": "Please select a school first."},
+                status=400
+                )
+
+        school = request.user.userprofile.school
+
+        products = Product.objects.filter(
+            business__school=school,
+            name__icontains=query,
+        )
+
+        businesses = BusinessProfile.objects.filter(
+            school=school,
+            name__icontains=query,
+        )
+        serializer = SearchSerializer({
+            "products": products,
+            "businesses": businesses,
+        })
+
+        return Response(serializer.data)
+
+"""
+
+class SearchView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        products = Product.objects.all()
+        
+        query = request.query_params.get("q", "").strip()
+
+        if not query:
+            return Response({
+                "products": [],
+                "businesses": []
+            })
+
+    
+
+        school = request.user.userprofile.school
+
+        products = (
+            Product.objects
+            .filter(
+                business__school=school,
+                is_private=False,
+                is_available=True,
+            )
+            .filter(
+                Q(name__icontains=query) |
+                Q(description__icontains=query) |
+                Q(category__name__icontains=query) |
+                Q(business__name__icontains=query)
+            )
+            .select_related(
+                "business",
+                "category",
+            )
+            .distinct()
+        )
+
+        businesses = (
+            BusinessProfile.objects
+            .filter(
+                school=school
+            )
+            .filter(
+                Q(name__icontains=query) |
+                Q(description__icontains=query) |
+                Q(category__name__icontains=query)
+            )
+            .distinct()
+        )
+
+        serializer = SearchSerializer({
+            "products": products,
+            "businesses": businesses,
+        })
+
+        return Response(serializer.data)
+"""
