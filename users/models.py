@@ -323,6 +323,14 @@ class Notification(models.Model):
         related_name="sent_notifications"
     )
 
+    conversation = models.ForeignKey(
+        Conversation,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="notifications"
+    )
+
     notification_type = models.CharField(
         max_length=20,
         choices=NOTIFICATION_TYPES

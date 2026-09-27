@@ -53,25 +53,14 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
             "school",
             "school_name",
         ]
+
         read_only_fields = [
             "id",
             "school",
             "school_name",
+            "category_name",
         ]
-        """
     
-    def create(self, validated_data):
-        #user will come from the view
-        return BusinessProfile.objects.create(**validated_data)
-        """
-    """
-    def validate(self, attrs):
-        user = self.context['request'].user
-        #only enforce on create not update
-        if self.instance is None and BusinessProfile.objects.filter(user=user).exists():
-            raise serializers.ValidationError("User already has a business.")
-        return attrs
-    """
     
 
 
@@ -122,11 +111,11 @@ class ListingImageSerializer(serializers.ModelSerializer):
 
         read_only_fields = [
             "id",
+            "product",
             "uploaded_at",
         ]
 
     def validate_image(self, value):
-
         if value.size > 2 * 1024 * 1024:
             raise serializers.ValidationError(
                 "Image too large. Maximum size is 2MB."
@@ -138,6 +127,11 @@ class ListingImageSerializer(serializers.ModelSerializer):
 
 class ProductSerializer(serializers.ModelSerializer):
     images = ListingImageSerializer(many=True, read_only=True)
+
+    seller_id = serializers.IntegerField(
+        source="business.user.id",
+        read_only=True
+    )
 
     business_name = serializers.CharField(
         source="business.name",
@@ -179,6 +173,7 @@ class ProductSerializer(serializers.ModelSerializer):
 
             "business",
             "business_name",
+            "seller_id",
 
             "category",
             "category_name",
@@ -193,6 +188,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "id",
             "business",
             "business_name",
+            "seller_id",
             "category",
             "category_name",
             "school",
@@ -354,12 +350,43 @@ class ConversationSerializer(serializers.ModelSerializer):
         many=True,
         queryset=User.objects.all()
     )
+    other_participant = serializers.SerializerMethodField()
+    latest_message = serializers.SerializerMethodField()
+    unread_count = serializers.SerializerMethodField()
+
+    def get_other_participant(self, obj):
+        request = self.context.get("request")
+        other_user = obj.participants.exclude(id=request.user.id).first()
+        if other_user is None:
+            return None
+        return {
+            "id": other_user.id,
+            "username": other_user.username,
+        }
+
+    def get_latest_message(self, obj):
+        message = obj.messages.select_related("sender").order_by("-created_at").first()
+        if message is None:
+            return None
+        return {
+            "text": message.text,
+            "sender": message.sender.username,
+            "is_mine": message.sender_id == self.context["request"].user.id,
+            "created_at": message.created_at,
+        }
+
+    def get_unread_count(self, obj):
+        user = self.context["request"].user
+        return obj.messages.exclude(sender=user).filter(is_read=False).count()
 
     class Meta:
         model = Conversation
         fields = [
             "id",
             "participants",
+            "other_participant",
+            "latest_message",
+            "unread_count",
             "created_at",
             "updated_at",
         ]
@@ -371,6 +398,11 @@ class ConversationSerializer(serializers.ModelSerializer):
 
 class MessageSerializer(serializers.ModelSerializer):
     sender = serializers.StringRelatedField(read_only=True)
+    is_mine = serializers.SerializerMethodField()
+
+    def get_is_mine(self, obj):
+        request = self.context.get("request")
+        return bool(request and request.user == obj.sender)
 
     class Meta:
         model = Message
@@ -378,6 +410,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "id",
             "conversation",
             "sender",
+            "is_mine",
             "text",
             "is_read",
             "created_at",
@@ -432,6 +465,7 @@ class NotificationSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "sender",
+            "conversation",
             "notification_type",
             "message",
             "is_read",
@@ -440,6 +474,7 @@ class NotificationSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "sender",
+            "conversation",
             "notification_type",
             "message",
             "created_at",

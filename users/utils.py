@@ -6,6 +6,7 @@ def create_notification(
     sender,
     notification_type,
     message,
+    conversation=None,
 ):
     if recipient == sender:
         return
@@ -13,6 +14,7 @@ def create_notification(
     Notification.objects.create(
         recipient=recipient,
         sender=sender,
+        conversation=conversation,
         notification_type=notification_type,
         message=message,
     )

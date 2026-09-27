@@ -41,6 +41,7 @@ from .models import Review
 from django.utils import timezone
 from datetime import timedelta
 from rest_framework import status, viewsets
+from rest_framework.decorators import action
 from django.db.models import Count
 from django.shortcuts import get_object_or_404
 from .models import Conversation, Message, BusinessFollow
@@ -63,12 +64,6 @@ class UserProfileView(generics.RetrieveUpdateAPIView):
     def get_object(self):
         return self.request.user.userprofile
 
-
-class BusinessProfileDetailView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = BusinessProfile.objects.all()
-    serializer_class = BusinessProfileSerializer
-    permission_classes = [IsAuthenticated, IsOwnerOrReadOnly]
-    
     
 
 class BusinessProfileViewSet(viewsets.ModelViewSet):
@@ -156,25 +151,7 @@ class CategoryRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAuthenticated]
 
 
-class BusinessProfileListCreateView(generics.ListCreateAPIView):
-    serializer_class = BusinessProfileSerializer
-    permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):
-        # optional : limit to users own businesws profile only
-        return BusinessProfile.objects.all()
-
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
-
-class BusinessProfileRetriveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = BusinessProfile.objects.all()
-    serializer_class = BusinessProfileSerializer
-    permission_classes = [IsAuthenticated]
-
-
-    def perform_update(self, serializer):
-        serializer.save(owner=self.request.user)
 
 
 
@@ -495,18 +472,32 @@ class ConversationViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED
         )
 
+    @action(detail=True, methods=["post"], url_path="mark-read")
+    def mark_read(self, request, pk=None):
+        conversation = self.get_object()
+        updated_count = conversation.messages.exclude(
+            sender=request.user
+        ).filter(is_read=False).update(is_read=True)
+        return Response({"updated_count": updated_count})
+
 class MessageViewSet(viewsets.ModelViewSet):
     serializer_class = MessageSerializer
     permission_classes = [IsAuthenticated]
     pagination_class = MarketplacePagination
 
     def get_queryset(self):
-        return (
+        queryset = (
             Message.objects
             .filter(conversation__participants=self.request.user)
             .select_related("sender", "conversation")
             .order_by("created_at")
         )
+
+        conversation_id = self.request.query_params.get("conversation")
+        if conversation_id:
+            queryset = queryset.filter(conversation_id=conversation_id)
+
+        return queryset
 
     def perform_create(self, serializer):
         conversation_id = self.request.data.get("conversation")
@@ -537,7 +528,8 @@ class MessageViewSet(viewsets.ModelViewSet):
             recipient=recipient,
             sender=self.request.user,
             notification_type=Notification.MESSAGE,
-            message=f"{self.request.user.username} sent you a message."
+            message=f"{self.request.user.username} sent you a message.",
+            conversation=conversation,
             )
         print("Notification attempted")
 
@@ -853,63 +845,3 @@ class ReportViewSet(viewsets.ModelViewSet):
         serializer.save(
             reporter=self.request.user
         )
-"""
-
-class SearchView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        products = Product.objects.all()
-        
-        query = request.query_params.get("q", "").strip()
-
-        if not query:
-            return Response({
-                "products": [],
-                "businesses": []
-            })
-
-    
-
-        school = request.user.userprofile.school
-
-        products = (
-            Product.objects
-            .filter(
-                business__school=school,
-                is_private=False,
-                is_available=True,
-            )
-            .filter(
-                Q(name__icontains=query) |
-                Q(description__icontains=query) |
-                Q(category__name__icontains=query) |
-                Q(business__name__icontains=query)
-            )
-            .select_related(
-                "business",
-                "category",
-            )
-            .distinct()
-        )
-
-        businesses = (
-            BusinessProfile.objects
-            .filter(
-                school=school
-            )
-            .filter(
-                Q(name__icontains=query) |
-                Q(description__icontains=query) |
-                Q(category__name__icontains=query)
-            )
-            .distinct()
-        )
-
-        serializer = SearchSerializer({
-            "products": products,
-            "businesses": businesses,
-        })
-
-        return Response(serializer.data)
-"""
