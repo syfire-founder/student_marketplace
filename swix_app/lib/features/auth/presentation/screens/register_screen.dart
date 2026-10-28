@@ -19,10 +19,12 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
+  final _verificationCodeController = TextEditingController();
 
   late Future<List<_School>> _schools;
   int? _schoolId;
   bool _obscurePassword = true;
+  bool _awaitingCode = false;
 
   @override
   void initState() {
@@ -36,6 +38,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
+    _verificationCodeController.dispose();
     super.dispose();
   }
 
@@ -81,6 +84,57 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
           content: Text(state.errorMessage ?? 'Could not create your account.'),
         ),
       );
+    } else {
+      setState(() => _awaitingCode = true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('We sent a code to ${_emailController.text.trim()}')),
+      );
+    }
+  }
+
+  Future<void> _verifyRegistration() async {
+    if (_verificationCodeController.text.trim().length != 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter the 6-digit code from your email.')),
+      );
+      return;
+    }
+    await ref.read(authControllerProvider.notifier).verifyRegistration(
+      email: _emailController.text.trim(),
+      code: _verificationCodeController.text.trim(),
+    );
+    if (!mounted) return;
+    final state = ref.read(authControllerProvider);
+    if (state.status == AuthStatus.authenticated) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const AuthenticatedScreen()),
+        (_) => false,
+      );
+    } else if (state.status == AuthStatus.error) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(state.errorMessage ?? 'The code could not be verified.')),
+      );
+    }
+  }
+
+  Future<void> _resendCode() async {
+    try {
+      await Dio().post(
+        '${ApiClient.baseUrl}/auth/resend-registration-code/',
+        data: {'email': _emailController.text.trim()},
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('A new code was sent to your email.')),
+      );
+    } on DioException catch (error) {
+      if (!mounted) return;
+      final detail = error.response?.data is Map
+          ? (error.response!.data as Map)['detail']?.toString()
+          : null;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(detail ?? 'Could not resend the code yet.')),
+      );
     }
   }
 
@@ -108,124 +162,131 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
           return SafeArea(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(24),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      'Join SWIX',
-                      style: Theme.of(context).textTheme.headlineMedium
-                          ?.copyWith(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 6),
-                    const Text('Buy and sell with students on your campus.'),
-                    const SizedBox(height: 28),
-                    TextFormField(
-                      controller: _usernameController,
-                      enabled: !isLoading,
-                      decoration: const InputDecoration(
-                        labelText: 'Username',
-                        border: OutlineInputBorder(),
-                      ),
-                      validator: (value) =>
-                          value == null || value.trim().isEmpty
-                          ? 'Enter a username'
-                          : null,
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: _emailController,
-                      enabled: !isLoading,
-                      keyboardType: TextInputType.emailAddress,
-                      decoration: const InputDecoration(
-                        labelText: 'Email',
-                        border: OutlineInputBorder(),
-                      ),
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return 'Enter your email';
-                          }
-                        if (!value.contains('@')) {
-                          return 'Enter a valid email';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    DropdownButtonFormField<int>(
-                      initialValue: _schoolId,
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                        labelText: 'School',
-                        border: OutlineInputBorder(),
-                      ),
-                      items: schools
-                          .map(
-                            (school) => DropdownMenuItem(
-                              value: school.id,
-                              child: Text(school.name),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: isLoading
-                          ? null
-                          : (value) => setState(() => _schoolId = value),
-                      validator: (value) =>
-                          value == null ? 'Choose your school' : null,
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: _passwordController,
-                      enabled: !isLoading,
-                      obscureText: _obscurePassword,
-                      decoration: InputDecoration(
-                        labelText: 'Password',
-                        border: const OutlineInputBorder(),
-                        suffixIcon: IconButton(
-                          icon: Icon(
-                            _obscurePassword
-                                ? Icons.visibility
-                                : Icons.visibility_off,
-                          ),
-                          onPressed: () => setState(
-                            () => _obscurePassword = !_obscurePassword,
-                          ),
-                        ),
-                      ),
-                      validator: (value) => value == null || value.length < 8
-                          ? 'Use at least 8 characters'
-                          : null,
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: _confirmPasswordController,
-                      enabled: !isLoading,
-                      obscureText: _obscurePassword,
-                      decoration: const InputDecoration(
-                        labelText: 'Confirm password',
-                        border: OutlineInputBorder(),
-                      ),
-                      validator: (value) => value != _passwordController.text
-                          ? 'Passwords do not match'
-                          : null,
-                    ),
-                    const SizedBox(height: 24),
-                    SizedBox(
-                      height: 52,
-                      child: FilledButton(
-                        onPressed: isLoading ? null : _register,
-                        child: isLoading
-                            ? const CircularProgressIndicator()
-                            : const Text('Create account'),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              child: _awaitingCode
+                  ? _buildVerificationForm(isLoading)
+                  : _buildRegistrationForm(schools, isLoading),
             ),
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildVerificationForm(bool isLoading) {
+    return Form(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Check your email', style: Theme.of(context).textTheme.headlineMedium),
+          const SizedBox(height: 8),
+          Text('Enter the 6-digit code sent to ${_emailController.text.trim()}. The code expires in 10 minutes.'),
+          const SizedBox(height: 24),
+          TextFormField(
+            controller: _verificationCodeController,
+            enabled: !isLoading,
+            keyboardType: TextInputType.number,
+            maxLength: 6,
+            decoration: const InputDecoration(
+              labelText: 'Email code',
+              border: OutlineInputBorder(),
+            ),
+            validator: (value) => value == null || value.trim().length != 6
+                ? 'Enter the 6-digit code'
+                : null,
+          ),
+          const SizedBox(height: 16),
+          FilledButton(
+            onPressed: isLoading ? null : _verifyRegistration,
+            child: isLoading
+                ? const CircularProgressIndicator()
+                : const Text('Verify and finish registration'),
+          ),
+          TextButton(
+            onPressed: isLoading ? null : _resendCode,
+            child: const Text('Send a new code'),
+          ),
+          TextButton(
+            onPressed: isLoading ? null : () => setState(() => _awaitingCode = false),
+            child: const Text('Edit registration details'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRegistrationForm(List<_School> schools, bool isLoading) {
+    return Form(
+      key: _formKey,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Join BlueBase',
+            style: Theme.of(context).textTheme.headlineMedium
+                ?.copyWith(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 6),
+          const Text('Buy and sell with students on your campus.'),
+          const SizedBox(height: 28),
+          TextFormField(
+            controller: _usernameController,
+            enabled: !isLoading,
+            decoration: const InputDecoration(labelText: 'Username', border: OutlineInputBorder()),
+            validator: (value) => value == null || value.trim().isEmpty ? 'Enter a username' : null,
+          ),
+          const SizedBox(height: 16),
+          TextFormField(
+            controller: _emailController,
+            enabled: !isLoading,
+            keyboardType: TextInputType.emailAddress,
+            decoration: const InputDecoration(labelText: 'Email', border: OutlineInputBorder()),
+            validator: (value) {
+              if (value == null || value.trim().isEmpty) return 'Enter your email';
+              if (!value.contains('@')) return 'Enter a valid email';
+              return null;
+            },
+          ),
+          const SizedBox(height: 16),
+          DropdownButtonFormField<int>(
+            initialValue: _schoolId,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: 'School', border: OutlineInputBorder()),
+            items: schools.map((school) => DropdownMenuItem(value: school.id, child: Text(school.name))).toList(),
+            onChanged: isLoading ? null : (value) => setState(() => _schoolId = value),
+            validator: (value) => value == null ? 'Choose your school' : null,
+          ),
+          const SizedBox(height: 16),
+          TextFormField(
+            controller: _passwordController,
+            enabled: !isLoading,
+            obscureText: _obscurePassword,
+            decoration: InputDecoration(
+              labelText: 'Password',
+              border: const OutlineInputBorder(),
+              suffixIcon: IconButton(
+                icon: Icon(_obscurePassword ? Icons.visibility : Icons.visibility_off),
+                onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+              ),
+            ),
+            validator: (value) => value == null || value.length < 8 ? 'Use at least 8 characters' : null,
+          ),
+          const SizedBox(height: 16),
+          TextFormField(
+            controller: _confirmPasswordController,
+            enabled: !isLoading,
+            obscureText: _obscurePassword,
+            decoration: const InputDecoration(labelText: 'Confirm password', border: OutlineInputBorder()),
+            validator: (value) => value != _passwordController.text ? 'Passwords do not match' : null,
+          ),
+          const SizedBox(height: 24),
+          SizedBox(
+            height: 52,
+            child: FilledButton(
+              onPressed: isLoading ? null : _register,
+              child: isLoading ? const CircularProgressIndicator() : const Text('Continue to email verification'),
+            ),
+          ),
+        ],
       ),
     );
   }

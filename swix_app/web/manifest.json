@@ -1,11 +1,11 @@
 {
-    "name": "swix_app",
-    "short_name": "swix_app",
+    "name": "BlueBase",
+    "short_name": "BlueBase",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Discover campus products and services and connect with local businesses.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

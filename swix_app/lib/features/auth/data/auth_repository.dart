@@ -50,15 +50,27 @@ class AuthRepository {
         },
       );
 
-      final token = response.data['token'];
+      return response.data['detail']?.toString() ?? 'Code sent.';
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
 
-      if (token == null || token.toString().isEmpty) {
-        throw Exception('Registration succeeded but no token was returned.');
+  Future<String> verifyRegistration({
+    required String email,
+    required String code,
+  }) async {
+    try {
+      final response = await apiClient.dio.post(
+        '/auth/verify-registration/',
+        data: {'email': email, 'code': code},
+      );
+      final token = response.data['token']?.toString();
+      if (token == null || token.isEmpty) {
+        throw Exception('Registration could not be completed.');
       }
-
-      await tokenStorage.saveToken(token.toString());
-
-      return token.toString();
+      await tokenStorage.saveToken(token);
+      return token;
     } on DioException catch (e) {
       throw Exception(_extractError(e));
     }

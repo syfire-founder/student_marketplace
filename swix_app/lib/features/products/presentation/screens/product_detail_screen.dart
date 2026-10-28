@@ -5,6 +5,10 @@ import 'package:flutter/material.dart';
 import '../../../../core/api/api_client.dart';
 import '../../../../core/services/token_storage.dart';
 import '../../../messages/presentation/screens/chat_screen.dart';
+import 'business_profile_screen.dart';
+import 'report_content_screen.dart';
+import '../widgets/business_follow_button.dart';
+import '../widgets/business_reviews_section.dart';
 
 class ProductDetailScreen extends StatefulWidget {
   const ProductDetailScreen({super.key, required this.productId});
@@ -76,6 +80,14 @@ class _ProductDetailsState extends State<_ProductDetails> {
   final PageController _pageController = PageController();
   int _activeImage = 0;
   bool _isStartingConversation = false;
+  bool _isFavorite = false;
+  bool _isUpdatingFavorite = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFavoriteStatus();
+  }
 
   @override
   void dispose() {
@@ -105,11 +117,15 @@ class _ProductDetailsState extends State<_ProductDetails> {
         throw const FormatException('Conversation did not include an id.');
       }
       if (!mounted) return;
+      final productImages = _imageUrls(widget.product['images']);
       await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => ChatScreen(
             conversationId: conversationId,
             sellerName: sellerName,
+            productId: int.tryParse(widget.product['id'].toString()),
+            productName: _text(widget.product['name'], 'Untitled listing'),
+            productImage: productImages.isEmpty ? null : productImages.first,
           ),
         ),
       );
@@ -131,6 +147,96 @@ class _ProductDetailsState extends State<_ProductDetails> {
     }
   }
 
+  Future<void> _toggleFavorite() async {
+    if (_isUpdatingFavorite) return;
+
+    setState(() => _isUpdatingFavorite = true);
+
+    try {
+      final token = await const TokenStorage().getToken();
+
+      if (token == null || token.isEmpty) {
+        throw Exception('You must be logged in to favorite a product.');
+      }
+
+      final method = _isFavorite ? 'DELETE' : 'POST';
+
+      await Dio().request(
+        '${ApiClient.baseUrl}/products/${widget.product['id']}/favorite/',
+        options: Options(
+          method: method,
+          headers: {'Authorization': 'Token $token'},
+        ),
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        _isFavorite = !_isFavorite;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _isFavorite
+                ? 'Added to favorites.'
+                : 'Removed from favorites.',
+          ),
+        ),
+      );
+    } on DioException catch (error) {
+      if (!mounted) return;
+
+      final message = error.response?.data is Map
+          ? error.response?.data['detail']?.toString()
+          : null;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            message ?? 'Could not update favorite. Try again.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.toString()),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isUpdatingFavorite = false);
+      }
+    }
+  }
+
+  Future<void> _loadFavoriteStatus() async {
+    try {
+      final token = await const TokenStorage().getToken();
+
+      if (token == null || token.isEmpty) return;
+
+       final response = await Dio().get(
+         '${ApiClient.baseUrl}/products/${widget.product['id']}/favorite/',
+         options: Options(
+           headers: {'Authorization': 'Token $token'},
+       ),
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        _isFavorite = response.data['is_favorite'] == true;
+      });
+    } on DioException {
+      // Don't prevent the product page from loading
+      // if checking favorite status fails.
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final product = widget.product;
@@ -144,6 +250,11 @@ class _ProductDetailsState extends State<_ProductDetails> {
         _nestedText(product, 'business_name', 'business', 'name') ??
         'Campus seller';
     final sellerId = _integer(product['seller_id']);
+    final productId = _integer(product['id']);
+    final businessValue = product['business'];
+    final businessId = _integer(
+      businessValue is Map ? businessValue['id'] : businessValue,
+    );
     final schoolName = _nestedText(product, 'school_name', 'school', 'name');
     final isService = product['listing_type']?.toString() == 'service';
     final isAvailable = product['is_available'] != false;
@@ -188,12 +299,36 @@ class _ProductDetailsState extends State<_ProductDetails> {
                   ],
                 ),
                 const SizedBox(height: 16),
-                Text(
-                  name,
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        name,
+                        style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: _isUpdatingFavorite ? null : _toggleFavorite,
+                      icon: _isUpdatingFavorite
+                      ? const SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Icon(
+                        _isFavorite
+                            ? Icons.favorite
+                            : Icons.favorite_border,
+                      ),
+                tooltip: _isFavorite
+                    ? 'Remove from favorites'
+                    : 'Add to favorites',
+              ),
+            ],
+          ),
                 const SizedBox(height: 8),
                 Text(
                   _price(product['price']),
@@ -214,11 +349,26 @@ class _ProductDetailsState extends State<_ProductDetails> {
                 const SizedBox(height: 8),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
-                  leading: const CircleAvatar(
-                    child: Icon(Icons.storefront_outlined),
+                  leading: CircleAvatar(
+                    child: Text(_businessInitials(businessName)),
                   ),
                   title: Text(businessName),
                   subtitle: schoolName == null ? null : Text(schoolName),
+                  trailing: businessId == null
+                      ? const Icon(Icons.chevron_right)
+                      : BusinessFollowButton(
+                          businessId: businessId,
+                          compact: true,
+                        ),
+                  onTap: businessId == null
+                      ? null
+                      : () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => BusinessProfileScreen(
+                                businessId: businessId,
+                              ),
+                            ),
+                          ),
                 ),
                 if (sellerId != null) ...[
                   const SizedBox(height: 12),
@@ -242,6 +392,29 @@ class _ProductDetailsState extends State<_ProductDetails> {
                     ),
                   ),
                 ],
+                if (businessId != null) ...[
+                  const SizedBox(height: 28),
+                  BusinessReviewsSection(
+                    businessId: businessId,
+                    businessName: businessName,
+                  ),
+                ],
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  onPressed: productId == null
+                      ? null
+                      : () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => ReportContentScreen(
+                        reportType: 'product',
+                        contentId: productId,
+                        contentName: name,
+                      ),
+                    ),
+                  ),
+                  icon: const Icon(Icons.flag_outlined),
+                  label: const Text('Report this listing'),
+                ),
               ],
             ),
           ),
@@ -396,4 +569,9 @@ String _price(dynamic value) {
 int? _integer(dynamic value) {
   if (value is int) return value;
   return int.tryParse(value?.toString() ?? '');
+}
+
+String _businessInitials(String name) {
+  final parts = name.trim().split(RegExp(r'\s+')).where((part) => part.isNotEmpty);
+  return parts.take(2).map((part) => part[0].toUpperCase()).join();
 }

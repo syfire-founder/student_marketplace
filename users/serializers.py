@@ -28,6 +28,8 @@ class CategorySerializer(serializers.ModelSerializer):
         return value
     
 class BusinessProfileSerializer(serializers.ModelSerializer):
+    products = serializers.SerializerMethodField()
+    is_owner = serializers.SerializerMethodField()
     category_name = serializers.CharField(
         source="category.name",
         read_only=True
@@ -47,11 +49,14 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "name",
+            "logo",
             "description",
             "category",
             "category_name",
             "school",
             "school_name",
+            "products",
+            "is_owner",
         ]
 
         read_only_fields = [
@@ -59,13 +64,46 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
             "school",
             "school_name",
             "category_name",
+            "is_owner",
         ]
+
+    def get_is_owner(self, obj):
+        request = self.context.get("request")
+        return bool(
+            request
+            and request.user.is_authenticated
+            and obj.user_id == request.user.id
+        )
+
+    def get_products(self, obj):
+        request = self.context.get("request")
+        owned_by_request_user = bool(
+            request
+            and request.user.is_authenticated
+            and obj.user_id == request.user.id
+        )
+        products = obj.products.all()
+        if not owned_by_request_user:
+            products = products.filter(
+                is_available=True,
+                is_private=False,
+            )
+        products = products.select_related(
+            "business",
+            "category",
+        ).prefetch_related("images").order_by("-created_at")
+        return ProductSerializer(
+            products,
+            many=True,
+            context=self.context,
+        ).data
     
     
 
 
 class UserRegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
+    email = serializers.EmailField(required=True, allow_blank=False)
 
     # User chooses their school during registration
     school = serializers.PrimaryKeyRelatedField(
@@ -81,6 +119,12 @@ class UserRegisterSerializer(serializers.ModelSerializer):
             "password",
             "school",
         )
+
+    def validate_email(self, value):
+        value = value.strip().lower()
+        if User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError("An account already uses this email.")
+        return value
 
     def create(self, validated_data):
         school = validated_data.pop("school")
@@ -140,8 +184,13 @@ class ProductSerializer(serializers.ModelSerializer):
 
     category = serializers.PrimaryKeyRelatedField(
         queryset=Category.objects.all(),
-        required=False,
-        allow_null=True
+        required=True,
+        allow_null=False,
+    )
+
+    description = serializers.CharField(
+        allow_blank=False,
+        trim_whitespace=True,
     )
 
     category_name = serializers.CharField(
@@ -189,7 +238,6 @@ class ProductSerializer(serializers.ModelSerializer):
             "business",
             "business_name",
             "seller_id",
-            "category",
             "category_name",
             "school",
             "school_name",
@@ -210,17 +258,12 @@ class SchoolSerializer(serializers.ModelSerializer):
 
 
 class ProductFavoriteSerializer(serializers.ModelSerializer):
+    product = ProductSerializer(read_only=True)
+
     class Meta:
         model = ProductFavorite
-        fields = [
-            "id",
-            "product",
-            "created_at",
-        ]
-        read_only_fields = [
-            "id",
-            "created_at",
-        ]
+        fields = ["id", "product", "created_at"]
+        read_only_fields = ["id", "product", "created_at"]
 
 
 class BusinessFollowSerializer(serializers.ModelSerializer):
@@ -274,6 +317,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
 class ReviewSerializer(serializers.ModelSerializer):
     user = serializers.StringRelatedField(read_only=True)
+    is_owner = serializers.SerializerMethodField()
 
     class Meta:
         model = Review
@@ -281,6 +325,7 @@ class ReviewSerializer(serializers.ModelSerializer):
             "id",
             "business",
             "user",
+            "is_owner",
             "rating",
             "comment",
             "created_at",
@@ -289,9 +334,18 @@ class ReviewSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "user",
+            "is_owner",
             "created_at",
             "updated_at",
         ]
+
+    def get_is_owner(self, obj):
+        request = self.context.get("request")
+        return bool(
+            request
+            and request.user.is_authenticated
+            and obj.user_id == request.user.id
+        )
 
     def validate_rating(self, value):
         if value < 1 or value > 5:
@@ -309,6 +363,11 @@ class ReviewSerializer(serializers.ModelSerializer):
             "business",
             self.instance.business if self.instance else None
         )
+
+        if business.is_suspended:
+            raise serializers.ValidationError(
+                "You cannot review a suspended business profile."
+            )
 
     # Users cannot review their own business.
         if business.user == request.user:
@@ -396,9 +455,39 @@ class ConversationSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
+
+
 class MessageSerializer(serializers.ModelSerializer):
     sender = serializers.StringRelatedField(read_only=True)
     is_mine = serializers.SerializerMethodField()
+    product_image = serializers.SerializerMethodField()
+    reply_to_text = serializers.SerializerMethodField()
+    reply_to_sender = serializers.SerializerMethodField()
+    product_name = serializers.CharField(
+        source="product.name",
+        read_only=True,
+        allow_null=True,
+    )
+
+    def get_product_image(self, obj):
+        if not obj.product_id:
+            return None
+
+        listing_image = next(iter(obj.product.images.all()), None)
+        if listing_image is None or not listing_image.image:
+            return None
+
+        image_url = listing_image.image.url
+        request = self.context.get("request")
+        if request is not None:
+            return request.build_absolute_uri(image_url)
+        return image_url
+
+    def get_reply_to_text(self, obj):
+        return obj.reply_to.text if obj.reply_to_id else None
+
+    def get_reply_to_sender(self, obj):
+        return obj.reply_to.sender.username if obj.reply_to_id else None
 
     def get_is_mine(self, obj):
         request = self.context.get("request")
@@ -409,6 +498,12 @@ class MessageSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "conversation",
+            "product",
+            "product_name",
+            "product_image",
+            "reply_to",
+            "reply_to_text",
+            "reply_to_sender",
             "sender",
             "is_mine",
             "text",
@@ -420,24 +515,13 @@ class MessageSerializer(serializers.ModelSerializer):
             "sender",
             "is_read",
             "created_at",
+            "product_name",
+            "product_image",
+            "reply_to_text",
+            "reply_to_sender",
         ]
 
-class ProductFavoriteSerializer(serializers.ModelSerializer):
-    user = serializers.StringRelatedField(read_only=True)
 
-    class Meta:
-        model = ProductFavorite
-        fields = [
-            "id",
-            "user",
-            "product",
-            "created_at",
-        ]
-        read_only_fields = [
-            "id",
-            "user",
-            "created_at",
-        ]
 
         
 class BusinessFollowSerializer(serializers.ModelSerializer):
@@ -490,6 +574,7 @@ class HomeFeedSerializer(serializers.Serializer):
     popular = ProductSerializer(many=True)
     new_arrivals = ProductSerializer(many=True)
     following = ProductSerializer(many=True)
+    all_listings = ProductSerializer(many=True)
 
 class RecentlyViewedSerializer(serializers.ModelSerializer):
     product = ProductSerializer(read_only=True)
@@ -503,35 +588,104 @@ class RecentlyViewedSerializer(serializers.ModelSerializer):
         ]
 
 class ReportSerializer(serializers.ModelSerializer):
+    reporter = serializers.StringRelatedField(read_only=True)
+    product_name = serializers.CharField(
+        source="product.name",
+        read_only=True,
+        allow_null=True,
+    )
+    business_name = serializers.CharField(
+        source="business.name",
+        read_only=True,
+        allow_null=True,
+    )
+    product_details = ProductSerializer(source="product", read_only=True)
+    business_details = serializers.SerializerMethodField()
+
     class Meta:
         model = Report
         fields = [
             "id",
             "report_type",
             "product",
+            "product_name",
+            "product_details",
             "business",
+            "business_name",
+            "business_details",
             "reason",
+            "reporter",
             "created_at",
+            "review_status",
+            "reviewed_at",
+            "reviewed_by",
         ]
 
         read_only_fields = [
             "id",
             "created_at",
+            "review_status",
+            "reviewed_at",
+            "reviewed_by",
         ]
 
-    def validate(self, attrs):
-        report_type = attrs.get("report_type")
-        product = attrs.get("product")
-        business = attrs.get("business")
+    def get_business_details(self, obj):
+        business = obj.business
+        if business is None and obj.product_id:
+            business = obj.product.business
+        if business is None:
+            return None
 
-        if report_type == Report.PRODUCT and not product:
+        logo = business.logo.url if business.logo else None
+        request = self.context.get("request")
+        if logo and request is not None:
+            logo = request.build_absolute_uri(logo)
+
+        return {
+            "id": business.id,
+            "name": business.name,
+            "description": business.description,
+            "logo": logo,
+            "owner": business.user.username,
+            "school": business.school.name,
+            "is_suspended": business.is_suspended,
+        }
+
+    def validate(self, attrs):
+        report_type = attrs.get(
+            "report_type",
+            getattr(self.instance, "report_type", None),
+        )
+        product = attrs.get("product", getattr(self.instance, "product", None))
+        business = attrs.get("business", getattr(self.instance, "business", None))
+
+        if report_type == Report.PRODUCT:
+            if product is None:
+                raise serializers.ValidationError(
+                    {"product": "Choose the product you are reporting."}
+                )
+            if business is not None:
+                raise serializers.ValidationError(
+                    {"business": "A product report cannot include a business."}
+                )
+        elif report_type == Report.BUSINESS:
+            if business is None:
+                raise serializers.ValidationError(
+                    {"business": "Choose the business you are reporting."}
+                )
+            if product is not None:
+                raise serializers.ValidationError(
+                    {"product": "A business report cannot include a product."}
+                )
+        else:
             raise serializers.ValidationError(
-                "A product report must include a product."
+                {"report_type": "Choose product or business."}
             )
 
-        if report_type == Report.BUSINESS and not business:
+        reason = attrs.get("reason", getattr(self.instance, "reason", ""))
+        if not reason.strip():
             raise serializers.ValidationError(
-                "A business report must include a business."
+                {"reason": "Explain why you are reporting this."}
             )
 
         return attrs

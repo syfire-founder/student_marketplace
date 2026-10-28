@@ -9,6 +9,7 @@ env/
 
 # Media uploads
 media/
+staticfiles/
 
 # Environment variables
 .env
@@ -19,3 +20,6 @@ media/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Local Flutter diagnostic output
+**/flutter_debug.txt

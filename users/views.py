@@ -1,9 +1,20 @@
 from rest_framework import viewsets
+from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.filters import SearchFilter
 from rest_framework.exceptions import ValidationError
+from django.conf import settings
+from django.contrib.auth.hashers import check_password, make_password
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.mail import send_mail
+import logging
+import secrets
 
-from .models import BusinessProfile, Product
+from .models import (
+    BusinessProfile, BusinessProfileVisit, Product, AppVisit, PendingRegistration,
+    AccountRecoveryCode,
+)
 from .serializers import BusinessProfileSerializer, ProductSerializer, ListingImageSerializer
 
 from rest_framework import generics, permissions
@@ -14,6 +25,7 @@ from rest_framework.generics import RetrieveUpdateDestroyAPIView
 from rest_framework.authtoken.models import Token
 from rest_framework.response import Response
 from django.contrib.auth.models import User
+from django.contrib.auth import authenticate
 from .serializers import UserRegisterSerializer
 from .permissions import IsOwnerOrReadOnly, IsBusinessOwnerOrReadOnly
 from rest_framework.exceptions import PermissionDenied
@@ -37,6 +49,7 @@ from .models import ProductFavorite
 from .serializers import BusinessDashboardSerializer
 from .models import ProductView
 from django.db.models import Count
+from django.db.models.functions import TruncDate
 from .models import Review
 from django.utils import timezone
 from datetime import timedelta
@@ -44,7 +57,7 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from django.db.models import Count
 from django.shortcuts import get_object_or_404
-from .models import Conversation, Message, BusinessFollow
+from .models import Conversation, Message, BusinessFollow, ConversationPair
 from .serializers import ConversationSerializer, MessageSerializer
 from .utils import create_notification
 from .serializers import ProductFavoriteSerializer
@@ -55,6 +68,81 @@ from .serializers import NotificationSerializer, SearchSerializer, HomeFeedSeria
 from .pagination import MarketplacePagination
 from .models import Report
 from .serializers import ReportSerializer
+from django.db import transaction, IntegrityError
+
+
+logger = logging.getLogger(__name__)
+
+
+def _create_email_code():
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def _send_short_email(to_email, subject, message):
+    if not to_email:
+        return False
+    try:
+        send_mail(
+            subject,
+            message,
+            settings.DEFAULT_FROM_EMAIL,
+            [to_email],
+            fail_silently=False,
+        )
+        return True
+    except Exception:
+        logger.exception("Could not send an application email to %s", to_email)
+        return False
+
+
+def _get_or_create_direct_conversation(first_user, second_user):
+    if first_user.id == second_user.id:
+        return None
+
+    user_low_id, user_high_id = sorted([first_user.id, second_user.id])
+    pair = ConversationPair.objects.filter(
+        user_low_id=user_low_id,
+        user_high_id=user_high_id,
+    ).select_related("conversation").first()
+    if pair is not None:
+        return pair.conversation
+
+    conversation = Conversation.objects.create()
+    conversation.participants.add(first_user, second_user)
+    try:
+        with transaction.atomic():
+            pair = ConversationPair.objects.create(
+                user_low_id=user_low_id,
+                user_high_id=user_high_id,
+                conversation=conversation,
+            )
+    except IntegrityError:
+        conversation.delete()
+        pair = ConversationPair.objects.select_related("conversation").get(
+            user_low_id=user_low_id,
+            user_high_id=user_high_id,
+        )
+    return pair.conversation
+
+
+def _send_inbox_message(sender, recipient, text):
+    conversation = _get_or_create_direct_conversation(sender, recipient)
+    if conversation is None:
+        return False
+
+    Message.objects.create(
+        conversation=conversation,
+        sender=sender,
+        text=text,
+    )
+    create_notification(
+        recipient=recipient,
+        sender=sender,
+        notification_type=Notification.MESSAGE,
+        message="You received a message from the BlueBase team.",
+        conversation=conversation,
+    )
+    return True
 
 # import here
 class UserProfileView(generics.RetrieveUpdateAPIView):
@@ -64,7 +152,7 @@ class UserProfileView(generics.RetrieveUpdateAPIView):
     def get_object(self):
         return self.request.user.userprofile
 
-    
+
 
 class BusinessProfileViewSet(viewsets.ModelViewSet):
     serializer_class = BusinessProfileSerializer
@@ -75,9 +163,33 @@ class BusinessProfileViewSet(viewsets.ModelViewSet):
     ordering = ["-id"]
 
     def get_queryset(self):
-        return BusinessProfile.objects.all()
+        queryset = BusinessProfile.objects.all()
+        user = self.request.user
+        if user.is_staff:
+            return queryset
+        if user.is_authenticated:
+            return queryset.filter(Q(is_suspended=False) | Q(user=user))
+        return queryset.filter(is_suspended=False)
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="mine",
+        permission_classes=[IsAuthenticated],
+    )
+    def mine(self, request):
+        business = self.get_queryset().filter(user=request.user).first()
+        if business is None:
+            return Response(
+                {"detail": "You do not have a business profile yet."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(self.get_serializer(business).data)
 
     def get_permissions(self):
+        if getattr(self, "action", None) == "mine":
+            return [IsAuthenticated()]
+
         if self.request.method in ["GET", "HEAD", "OPTIONS"]:
             return [AllowAny()]
 
@@ -104,10 +216,26 @@ class BusinessProfileViewSet(viewsets.ModelViewSet):
                 "Please select your school before creating a business profile."
             )
 
-        serializer.save(
+        business = serializer.save(
             user=self.request.user,
             school=profile.school
         )
+        _send_short_email(
+            self.request.user.email,
+            "Your BlueBase business profile is ready",
+            f"Hi {self.request.user.username}, your business profile “{business.name}” "
+            "has been created. You can now add products or services for students to find.",
+        )
+
+    def retrieve(self, request, *args, **kwargs):
+        business = self.get_object()
+        if request.user.is_authenticated:
+            BusinessProfileVisit.objects.update_or_create(
+                user=request.user,
+                business=business,
+                defaults={"viewed_at": timezone.now()},
+            )
+        return Response(self.get_serializer(business).data)
 
 class BusinessProfileSearchViewSet(viewsets.ReadOnlyModelViewSet):
     """
@@ -126,7 +254,7 @@ class BusinessProfileSearchViewSet(viewsets.ReadOnlyModelViewSet):
 class CategoryListView(ListAPIView):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
-    
+
 class CategoryListCreateView(generics.ListCreateAPIView):
     queryset = Category.objects.all().order_by("id")
     serializer_class = CategorySerializer
@@ -155,27 +283,292 @@ class CategoryRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
 
 
 
-class RegisterView(generics.CreateAPIView):
-    queryset = User.objects.all()
-    serializer_class = UserRegisterSerializer
+class RegisterView(APIView):
     permission_classes = [AllowAny]
 
-    def create(self, request, *args, **kwargs):
-        response = super().create(request, *args, **kwargs)
-        user = User.objects.get(username=response.data['username'])
-        token, _ = Token.objects.get_or_create(user=user)
+    def post(self, request):
+        serializer = UserRegisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        username = serializer.validated_data["username"].strip()
+        email = serializer.validated_data["email"].strip().lower()
+        password = serializer.validated_data["password"]
+        school = serializer.validated_data["school"]
+
+        if User.objects.filter(email__iexact=email).exists():
+            raise ValidationError({"email": "An account already uses this email."})
+        try:
+            validate_password(password, user=User(username=username, email=email))
+        except DjangoValidationError as error:
+            raise ValidationError({"password": error.messages})
+
+        now = timezone.now()
+        PendingRegistration.objects.filter(expires_at__lte=now).delete()
+        pending = PendingRegistration.objects.filter(email__iexact=email).first()
+        if pending is None:
+            pending = PendingRegistration.objects.filter(username__iexact=username).first()
+        if pending is not None:
+            email_conflict = PendingRegistration.objects.filter(
+                email__iexact=email
+            ).exclude(pk=pending.pk).exists()
+            if email_conflict:
+                raise ValidationError({"email": "A registration is already pending for this email."})
+            if (now - pending.last_sent_at).total_seconds() < 60:
+                return Response(
+                    {"detail": "A code was sent recently. Please check your email or wait before requesting another."},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+        elif PendingRegistration.objects.filter(username__iexact=username).exists():
+            raise ValidationError({"username": "A registration is already pending for this username."})
+
+        code = _create_email_code()
+        if pending is None:
+            pending = PendingRegistration.objects.create(
+                username=username,
+                email=email,
+                password_hash=make_password(password),
+                school=school,
+                code_hash=make_password(code),
+                expires_at=now + timedelta(minutes=10),
+                last_sent_at=now - timedelta(minutes=2),
+            )
+        else:
+            pending.username = username
+            pending.email = email
+            pending.password_hash = make_password(password)
+            pending.school = school
+            pending.code_hash = make_password(code)
+            pending.expires_at = now + timedelta(minutes=10)
+            pending.attempts = 0
+            pending.last_sent_at = now - timedelta(minutes=2)
+            pending.save(update_fields=[
+                "password_hash", "school", "code_hash", "expires_at",
+                "attempts", "last_sent_at", "username", "email",
+            ])
+
+        sent = _send_short_email(
+            email,
+            "Your BlueBase registration code",
+            f"Your BlueBase registration code is {code}. It expires in 10 minutes. "
+            "If you did not request this, you can ignore this email.",
+        )
+        if not sent:
+            return Response(
+                {"detail": "We could not send your code right now. Please try again shortly."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        pending.last_sent_at = now
+        pending.save(update_fields=["last_sent_at"])
+        return Response(
+            {"detail": "A registration code was sent to your email.", "expires_in_seconds": 600},
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class VerifyRegistrationView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = str(request.data.get("email", "")).strip().lower()
+        code = str(request.data.get("code", "")).strip()
+        if not email or not code:
+            raise ValidationError({"detail": "Enter the email address and code."})
+
+        with transaction.atomic():
+            pending = PendingRegistration.objects.select_for_update().filter(
+                email__iexact=email
+            ).first()
+            if pending is None:
+                return Response({"detail": "The code is invalid or expired."}, status=400)
+            if pending.expires_at <= timezone.now():
+                pending.delete()
+                return Response({"detail": "The code expired. Start registration again."}, status=400)
+            if pending.attempts >= 5:
+                pending.delete()
+                return Response({"detail": "Too many incorrect attempts. Start registration again."}, status=400)
+            if not check_password(code, pending.code_hash):
+                pending.attempts += 1
+                pending.save(update_fields=["attempts"])
+                return Response({"detail": "The code is incorrect."}, status=400)
+
+            user = User(
+                username=pending.username,
+                email=pending.email,
+                password=pending.password_hash,
+            )
+            user.save(force_insert=True)
+            UserProfile.objects.create(user=user, school=pending.school)
+            token, _ = Token.objects.get_or_create(user=user)
+            pending.delete()
+
+        _send_short_email(
+            user.email,
+            "Welcome to BlueBase",
+            f"Hi {user.username}, your BlueBase account is ready. You can now discover "
+            "campus businesses, save listings, and message sellers.",
+        )
+        return Response(
+            {"token": token.key, "is_admin": False},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class ResendRegistrationCodeView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = str(request.data.get("email", "")).strip().lower()
+        pending = PendingRegistration.objects.filter(email__iexact=email).first()
+        if pending is None:
+            return Response({"detail": "No pending registration was found."}, status=404)
+        now = timezone.now()
+        if (now - pending.last_sent_at).total_seconds() < 60:
+            return Response(
+                {"detail": "Please wait before requesting another code."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        code = _create_email_code()
+        pending.code_hash = make_password(code)
+        pending.expires_at = now + timedelta(minutes=10)
+        pending.attempts = 0
+        pending.save(update_fields=["code_hash", "expires_at", "attempts"])
+        if not _send_short_email(
+            email,
+            "Your new BlueBase registration code",
+            f"Your new BlueBase registration code is {code}. It expires in 10 minutes.",
+        ):
+            return Response(
+                {"detail": "We could not send your code right now. Please try again shortly."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        pending.last_sent_at = now
+        pending.save(update_fields=["last_sent_at"])
+        return Response({"detail": "A new code was sent to your email."})
+
+
+class PasswordResetRequestView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = str(request.data.get("email", "")).strip().lower()
+        user = User.objects.filter(email__iexact=email, is_staff=False).first()
+        if user is not None:
+            now = timezone.now()
+            recovery, _ = AccountRecoveryCode.objects.get_or_create(
+                user=user,
+                defaults={
+                    "code_hash": make_password(_create_email_code()),
+                    "expires_at": now,
+                    "last_sent_at": now - timedelta(minutes=2),
+                },
+            )
+            if (now - recovery.last_sent_at).total_seconds() >= 60:
+                code = _create_email_code()
+                recovery.code_hash = make_password(code)
+                recovery.expires_at = now + timedelta(minutes=10)
+                recovery.attempts = 0
+                recovery.save(update_fields=["code_hash", "expires_at", "attempts"])
+                if _send_short_email(
+                    user.email,
+                    "Reset your BlueBase password",
+                    f"Your BlueBase password reset code is {code}. It expires in 10 minutes. "
+                    "If you did not request this, ignore this email.",
+                ):
+                    recovery.last_sent_at = now
+                    recovery.save(update_fields=["last_sent_at"])
         return Response({
-            'user': response.data,
-            'token': token.key
+            "detail": "If an account uses that email, a password reset code will be sent shortly."
         })
+
+
+class PasswordResetConfirmView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = str(request.data.get("email", "")).strip().lower()
+        code = str(request.data.get("code", "")).strip()
+        new_password = str(request.data.get("new_password", ""))
+        recovery = AccountRecoveryCode.objects.select_related("user").filter(
+            user__email__iexact=email,
+            user__is_staff=False,
+        ).first()
+        if recovery is None or not code or not new_password:
+            return Response({"detail": "The code is invalid or expired."}, status=400)
+        if recovery.expires_at <= timezone.now() or recovery.attempts >= 5:
+            recovery.delete()
+            return Response({"detail": "The code is invalid or expired."}, status=400)
+        if not check_password(code, recovery.code_hash):
+            recovery.attempts += 1
+            recovery.save(update_fields=["attempts"])
+            return Response({"detail": "The code is incorrect."}, status=400)
+        try:
+            validate_password(new_password, user=recovery.user)
+        except DjangoValidationError as error:
+            raise ValidationError({"new_password": error.messages})
+
+        with transaction.atomic():
+            user = User.objects.select_for_update().get(pk=recovery.user_id)
+            user.set_password(new_password)
+            user.save(update_fields=["password"])
+            Token.objects.filter(user=user).delete()
+            recovery.delete()
+        return Response({"detail": "Your password was reset. Please sign in with your new password."})
+
+
+class RegularLoginView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        user = authenticate(
+            request,
+            username=request.data.get("username"),
+            password=request.data.get("password"),
+        )
+        if user is None:
+            return Response(
+                {"detail": "Incorrect username or password."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if user.is_staff:
+            return Response(
+                {"detail": "Use the administrator sign-in."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        token, _ = Token.objects.get_or_create(user=user)
+        return Response({"token": token.key, "is_admin": False})
+
+
+class AdminLoginView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        user = authenticate(
+            request,
+            username=request.data.get("username"),
+            password=request.data.get("password"),
+        )
+        if user is None:
+            return Response(
+                {"detail": "Incorrect administrator username or password."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not user.is_staff:
+            return Response(
+                {"detail": "This account is not an administrator account."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        token, _ = Token.objects.get_or_create(user=user)
+        return Response({"token": token.key, "is_admin": True})
 
 
 
 class ProductViewSet(viewsets.ModelViewSet):
-    serializer_class = ProductSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
-    pagination_class = MarketplacePagination
 
+    serializer_class = ProductSerializer
+    permission_classes = [
+        IsAuthenticatedOrReadOnly,
+        IsOwnerOrReadOnly,
+    ]
+    pagination_class = MarketplacePagination
 
     def get_queryset(self):
         user = self.request.user
@@ -184,59 +577,70 @@ class ProductViewSet(viewsets.ModelViewSet):
             "business",
             "business__school",
             "business__user",
-            ).prefetch_related(
-                "images"
-                )
+        ).prefetch_related(
+            "images"
+        )
 
         if not user.is_authenticated:
-            return queryset.filter(is_private=False)
+            return queryset.filter(
+                is_private=False,
+                business__is_suspended=False,
+            )
 
         try:
             user_school = user.userprofile.school
         except UserProfile.DoesNotExist:
-            return queryset.filter(is_private=False)
+            return queryset.filter(
+                is_private=False,
+                business__is_suspended=False,
+            )
 
         filtered = queryset.filter(
             Q(
                 is_private=False,
-                business__school=user_school
+                business__school=user_school,
+                business__is_suspended=False,
             )
             |
-            Q(business__user=user)
+            Q(
+                business__user=user
+            )
         ).distinct()
-        
+
         print("USER:", user)
         print("USER SCHOOL:", user_school)
-        print("RESULT PRODUCTS:", list(filtered.values_list("name", flat=True)))
-    
+        print(
+            "RESULT PRODUCTS:",
+            list(filtered.values_list("name", flat=True))
+        )
+
         return filtered
-
-
-    filter_backends = [DjangoFilterBackend, SearchFilter]
-
-    filterset_fields = [
-        "listing_type",
-        "business__category",
-        "is_available",
-    ]
-
-    search_fields = [
-        "name",
-        "description",
-        "business__name",
-        "business__category__name"
-    ]
-    
-    ordering_fields = ["name", "price", "created_at"]
-    ordering = ["-created_at"]
 
     def perform_create(self, serializer):
         try:
             business = self.request.user.businessprofile
         except BusinessProfile.DoesNotExist:
-            raise PermissionDenied("You do not have a business profile.")
+            raise PermissionDenied(
+                "You do not have a business profile."
+            )
 
-        serializer.save(business=business)
+        if business.is_suspended:
+            raise PermissionDenied(
+                "Your business profile is suspended, so you cannot add listings."
+            )
+
+        images = self.request.FILES.getlist("images")
+        if not images:
+            raise ValidationError({"images": "Add at least one listing photo."})
+        if len(images) > 5:
+            raise ValidationError({"images": "A listing can have up to 5 photos."})
+        if any(image.size > 2 * 1024 * 1024 for image in images):
+            raise ValidationError({"images": "Each photo must be under 2 MB."})
+
+        with transaction.atomic():
+            product = serializer.save(business=business)
+            for image in images:
+                ListingImage.objects.create(product=product, image=image)
 
     def retrieve(self, request, *args, **kwargs):
         product = self.get_object()
@@ -250,7 +654,74 @@ class ProductViewSet(viewsets.ModelViewSet):
 
         return Response(serializer.data)
 
+    def get_permissions(self):
+        print("CURRENT ACTION:", self.action)
 
+        if self.action == "favorite":
+            print("FAVORITE PERMISSION SELECTED")
+            return [IsAuthenticated()]
+
+        return super().get_permissions()
+
+    @action(
+        detail=True,
+        methods=["get", "post", "delete"],
+        url_path="favorite"
+    )
+    def favorite(self, request, pk=None):
+        product = self.get_object()
+
+        if request.method == "GET":
+            is_favorite = ProductFavorite.objects.filter(
+                user=request.user,
+                product=product
+            ).exists()
+
+            return Response({
+                "is_favorite": is_favorite
+            })
+
+        if request.method == "POST":
+            favorite, created = ProductFavorite.objects.get_or_create(
+                user=request.user,
+                product=product
+            )
+
+            if not created:
+                return Response(
+                    {
+                        "detail":
+                        "You have already favorited this product."
+                    },
+                    status=400
+                )
+
+            return Response(
+                {
+                    "id": favorite.id,
+                    "product": product.id,
+                    "detail": "Product added to favorites."
+                },
+                status=201
+            )
+
+        deleted, _ = ProductFavorite.objects.filter(
+            user=request.user,
+            product=product
+        ).delete()
+
+        if deleted == 0:
+            return Response(
+                {
+                    "detail": "Product is not in your favorites."
+                },
+                status=404
+            )
+
+        return Response(
+            {"detail": "Product removed from favorites."},
+            status=204
+        )
 
 
 class ListingImageViewSet(viewsets.ModelViewSet):
@@ -263,7 +734,7 @@ class ListingImageViewSet(viewsets.ModelViewSet):
        # return ListingImage.objects.all()
 
     def perform_create(self, serializer):
-        
+
         product_id = self.request.data.get("product")
 
         if not product_id:
@@ -280,7 +751,7 @@ class ListingImageViewSet(viewsets.ModelViewSet):
             raise PermissionDenied(
                 "You cannot upload images to this listing."
             )
-        
+
         if product.images.count() >= 5:
             raise ValidationError(
                 "Maximum 5 images allowed."
@@ -309,6 +780,17 @@ class ReviewViewSet(viewsets.ModelViewSet):
         "business"
     )
     pagination_class = MarketplacePagination
+
+    def get_queryset(self):
+        queryset = self.queryset
+        business_id = self.request.query_params.get("business")
+        if business_id:
+            try:
+                business_id = int(business_id)
+            except (TypeError, ValueError):
+                return queryset.none()
+            queryset = queryset.filter(business_id=business_id)
+        return queryset
 
     def get_permissions(self):
         if self.request.method in ["GET", "HEAD", "OPTIONS"]:
@@ -427,10 +909,21 @@ class ConversationViewSet(viewsets.ModelViewSet):
             .order_by("-updated_at")
         )
 
+    @action(detail=False, methods=["get"], url_path="unread-count")
+    def unread_count(self, request):
+        count = Message.objects.filter(
+            conversation__participants=request.user,
+            is_read=False,
+        ).exclude(sender=request.user).count()
+        return Response({"unread_count": count})
+
+
+
+
     def create(self, request, *args, **kwargs):
         participant_ids = request.data.get("participants", [])
 
-        if len(participant_ids) != 1:
+        if not isinstance(participant_ids, list) or len(participant_ids) != 1:
             raise ValidationError(
                 "Provide exactly one user to start a conversation."
             )
@@ -445,32 +938,51 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 "You cannot start a conversation with yourself."
             )
 
-        existing = (
-            Conversation.objects
-            .filter(participants=request.user)
-            .filter(participants=other_user)
-            .annotate(num_participants=Count("participants"))
-            .filter(num_participants=2)
-            .first()
+        user_low_id, user_high_id = sorted(
+            [request.user.id, other_user.id]
         )
 
-        if existing:
-            serializer = self.get_serializer(existing)
-            return Response(serializer.data)
+        with transaction.atomic():
+            pair = ConversationPair.objects.filter(
+                user_low_id=user_low_id,
+                user_high_id=user_high_id,
+            ).select_related("conversation").first()
 
-        conversation = Conversation.objects.create()
+            if pair:
+                serializer = self.get_serializer(pair.conversation)
+                return Response(serializer.data)
 
-        conversation.participants.add(
-            request.user,
-            other_user
-        )
+            conversation = Conversation.objects.create()
+            conversation.participants.add(request.user, other_user)
 
-        serializer = self.get_serializer(conversation)
+            try:
+                # Keep the unique-constraint failure inside a savepoint so
+                # the surrounding transaction remains usable for recovery.
+                with transaction.atomic():
+                    ConversationPair.objects.create(
+                        user_low_id=user_low_id,
+                        user_high_id=user_high_id,
+                        conversation=conversation,
+                    )
+            except IntegrityError:
+                # Another request may have created this pair concurrently.
+                conversation.delete()
 
-        return Response(
-            serializer.data,
-            status=status.HTTP_201_CREATED
-        )
+                pair = ConversationPair.objects.select_related(
+                    "conversation"
+                ).get(
+                    user_low_id=user_low_id,
+                    user_high_id=user_high_id,
+                )
+
+                serializer = self.get_serializer(pair.conversation)
+                return Response(serializer.data)
+
+            serializer = self.get_serializer(conversation)
+            return Response(
+                serializer.data,
+                status=status.HTTP_201_CREATED
+            )
 
     @action(detail=True, methods=["post"], url_path="mark-read")
     def mark_read(self, request, pk=None):
@@ -489,15 +1001,33 @@ class MessageViewSet(viewsets.ModelViewSet):
         queryset = (
             Message.objects
             .filter(conversation__participants=self.request.user)
-            .select_related("sender", "conversation")
+            .select_related(
+                "sender",
+                "conversation",
+                "product",
+                "reply_to",
+                "reply_to__sender",
+            )
+            .prefetch_related("product__images")
             .order_by("created_at")
         )
+
 
         conversation_id = self.request.query_params.get("conversation")
         if conversation_id:
             queryset = queryset.filter(conversation_id=conversation_id)
 
+        after_id = self.request.query_params.get("after")
+        if after_id:
+            try:
+                after_id = int(after_id)
+                queryset = queryset.filter(id__gt=after_id)
+            except ValueError:
+                return queryset.none()
+
         return queryset
+
+
 
     def perform_create(self, serializer):
         conversation_id = self.request.data.get("conversation")
@@ -512,26 +1042,56 @@ class MessageViewSet(viewsets.ModelViewSet):
                 "You are not a participant in this conversation."
             )
 
+        reply_to = serializer.validated_data.get("reply_to")
+        if reply_to is not None and reply_to.conversation_id != conversation.id:
+            raise ValidationError(
+                {"reply_to": "You can only reply to a message in this conversation."}
+            )
+
+        product_id = self.request.data.get("product")
+
+        product = None
+        if product_id not in (None, ""):
+            product = get_object_or_404(
+                Product.objects.select_related("business__user"),
+                id=product_id
+            )
+
+            participants = list(
+                conversation.participants.all()
+            )
+
+            if len(participants) != 2:
+                raise PermissionDenied(
+                    "Product context requires a conversation between two users."
+                )
+
+            participant_ids = {user.id for user in participants}
+
+            if product.business.user_id not in participant_ids:
+                raise PermissionDenied(
+                    "The listing owner must be a participant in this conversation."
+                )
+
         message = serializer.save(
             sender=self.request.user,
-            conversation=conversation
-            )
-            #
-        print("Sender:", self.request.user)
+            conversation=conversation,
+            product=product
+        )
 
         recipient = conversation.participants.exclude(
             id=self.request.user.id
-            ).first()
-        print("Recipient:", recipient)
+        ).first()
 
-        create_notification(
-            recipient=recipient,
-            sender=self.request.user,
-            notification_type=Notification.MESSAGE,
-            message=f"{self.request.user.username} sent you a message.",
-            conversation=conversation,
+        if recipient:
+            create_notification(
+                recipient=recipient,
+                sender=self.request.user,
+                notification_type=Notification.MESSAGE,
+                message=f"{self.request.user.username} sent you a message.",
+                conversation=conversation,
             )
-        print("Notification attempted")
+
 
     def perform_update(self, serializer):
         if serializer.instance.sender != self.request.user:
@@ -558,7 +1118,8 @@ class ProductFavoriteViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return ProductFavorite.objects.filter(
-            user=self.request.user
+            user=self.request.user,
+            product__business__is_suspended=False,
         ).select_related("product")
 
     def perform_create(self, serializer):
@@ -568,6 +1129,9 @@ class ProductFavoriteViewSet(viewsets.ModelViewSet):
             Product,
             id=product_id
         )
+
+        if product.business.is_suspended:
+            raise ValidationError("This listing is unavailable.")
 
         if ProductFavorite.objects.filter(
             user=self.request.user,
@@ -604,6 +1168,9 @@ class BusinessFollowViewSet(viewsets.ModelViewSet):
             raise ValidationError(
                 "You cannot follow your own business."
             )
+
+        if business.is_suspended:
+            raise ValidationError("This business profile is suspended.")
 
         if BusinessFollow.objects.filter(
             user=self.request.user,
@@ -690,6 +1257,7 @@ class SearchView(APIView):
         # 3. Base queryset
         products = Product.objects.filter(
             business__school=school,
+            business__is_suspended=False,
             is_private=False,
             is_available=True,
         )
@@ -729,7 +1297,8 @@ class SearchView(APIView):
             products = products.order_by("-created_at")
         # 6. Businesses
         businesses = BusinessProfile.objects.filter(
-            school=school
+            school=school,
+            is_suspended=False,
         )
         if query:
             businesses = businesses.filter(
@@ -766,9 +1335,16 @@ class HomeFeedView(APIView):
             )
         products = Product.objects.filter(
             business__school=school,
+            business__is_suspended=False,
             is_available=True,
             is_private=False
+            ).select_related(
+                "business",
+                "category",
+            ).prefetch_related(
+                "images",
             )
+        all_listings = products.order_by("-created_at")[:100]
         new_arrivals = products.order_by("-created_at")[:10]
         popular = (
             products
@@ -800,15 +1376,69 @@ class HomeFeedView(APIView):
                 "-created_at",
             )[:10]
         )
-        
+
         serializer = HomeFeedSerializer({
             "recommended": recommended,
             "popular": popular,
             "new_arrivals": new_arrivals,
             "following": following,
-        })
-        
+            "all_listings": all_listings,
+        }, context={"request": request})
+
         return Response(serializer.data)
+
+
+class AppVisitView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        AppVisit.objects.create(user=request.user)
+        return Response({"recorded": True}, status=status.HTTP_201_CREATED)
+
+
+class AdminAnalyticsView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        today = timezone.localdate()
+        start_date = today - timedelta(days=29)
+        start_at = timezone.make_aware(
+            timezone.datetime.combine(start_date, timezone.datetime.min.time())
+        )
+
+        def daily_counts(queryset, field):
+            rows = (
+                queryset.filter(**{f"{field}__gte": start_at})
+                .annotate(day=TruncDate(field, tzinfo=timezone.get_current_timezone()))
+                .values("day")
+                .annotate(count=Count("id"))
+                .order_by("day")
+            )
+            counts = {row["day"].isoformat(): row["count"] for row in rows}
+            return [
+                {"date": (start_date + timedelta(days=offset)).isoformat(),
+                 "count": counts.get((start_date + timedelta(days=offset)).isoformat(), 0)}
+                for offset in range(30)
+            ]
+
+        categories = Category.objects.annotate(
+            business_count=Count("businessprofile")
+        ).order_by("name")
+
+        return Response({
+            "total_users": User.objects.filter(
+                is_staff=False, is_superuser=False
+            ).count(),
+            "total_business_profiles": BusinessProfile.objects.count(),
+            "users_registered_daily": daily_counts(
+                User.objects.filter(is_staff=False, is_superuser=False), "date_joined"
+            ),
+            "app_visits_daily": daily_counts(AppVisit.objects.all(), "visited_at"),
+            "business_profiles_by_category": [
+                {"category": category.name, "count": category.business_count}
+                for category in categories
+            ],
+        })
 
 class RecentlyViewedView(APIView):
     permission_classes = [IsAuthenticated]
@@ -816,7 +1446,10 @@ class RecentlyViewedView(APIView):
     def get(self, request):
         views = (
             ProductView.objects
-            .filter(user=request.user)
+            .filter(
+                user=request.user,
+                product__business__is_suspended=False,
+            )
             .select_related(
                 "product",
                 "product__business",
@@ -825,23 +1458,251 @@ class RecentlyViewedView(APIView):
             .order_by("-viewed_at")
         )
 
+        # Keep one recent entry per listing, using its latest visit.
+        recent_views = []
+        seen_product_ids = set()
+        for view in views.iterator():
+            if view.product_id in seen_product_ids:
+                continue
+            seen_product_ids.add(view.product_id)
+            recent_views.append(view)
+            if len(recent_views) == 30:
+                break
+
         serializer = RecentlyViewedSerializer(
-            views,
+            recent_views,
             many=True
         )
 
         return Response(serializer.data)
 
-class ReportViewSet(viewsets.ModelViewSet):
-    serializer_class = ReportSerializer
+
+class RecentlyViewedBusinessesView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):
-        return Report.objects.filter(
-            reporter=self.request.user
+    def get(self, request):
+        visits = (
+            BusinessProfileVisit.objects
+            .filter(user=request.user, business__is_suspended=False)
+            .select_related("business", "business__category", "business__school")
+            .order_by("-viewed_at")[:30]
         )
+        return Response([
+            {
+                "id": visit.id,
+                "business": BusinessProfileSerializer(
+                    visit.business, context={"request": request}
+                ).data,
+                "viewed_at": visit.viewed_at,
+            }
+            for visit in visits
+        ])
+
+class ReportViewSet(viewsets.ModelViewSet):
+    serializer_class = ReportSerializer
+    pagination_class = None
+    http_method_names = ["get", "post", "head", "options"]
+
+    def get_queryset(self):
+        queryset = Report.objects.select_related(
+            "reporter",
+            "product",
+            "business",
+            "business__user",
+            "business__school",
+            "product__business__user",
+            "product__business__school",
+        ).order_by("-created_at")
+        if self.request.user.is_staff:
+            return queryset
+        return queryset.none()
+
+    def get_permissions(self):
+        if self.action == "create":
+            return [IsAuthenticated()]
+        return [IsAdminUser()]
 
     def perform_create(self, serializer):
-        serializer.save(
-            reporter=self.request.user
-        )
+        with transaction.atomic():
+            report = serializer.save(reporter=self.request.user)
+            admin_sender = User.objects.filter(
+                is_staff=True
+            ).exclude(
+                id=self.request.user.id
+            ).order_by("id").first()
+            if admin_sender is not None:
+                reported_item = (
+                    f'listing “{report.product.name}”'
+                    if report.product_id
+                    else f'business “{report.business.name}”'
+                )
+                _send_inbox_message(
+                    admin_sender,
+                    self.request.user,
+                    f"Thank you for reporting {reported_item}. The BlueBase "
+                    "team has received your report and will investigate it.",
+                )
+
+    @action(detail=True, methods=["post"], url_path="review")
+    def review(self, request, pk=None):
+        report = self.get_object()
+        if report.review_status != Report.PENDING:
+            raise ValidationError({"detail": "This report has already been reviewed."})
+        outcome = request.data.get("outcome")
+        if outcome not in (Report.REVIEWED, Report.DISMISSED):
+            raise ValidationError({
+                "outcome": "Choose 'reviewed' or 'dismissed'.",
+            })
+
+        reporter_notified = False
+        owner_notified = False
+        with transaction.atomic():
+            report.review_status = outcome
+            report.reviewed_at = timezone.now()
+            report.reviewed_by = request.user
+            report.save(update_fields=["review_status", "reviewed_at", "reviewed_by"])
+
+            if outcome == Report.DISMISSED:
+                business = report.business
+                if business is None and report.product_id:
+                    business = report.product.business
+
+                reported_item = (
+                    f'listing “{report.product.name}”'
+                    if report.product_id
+                    else f'business “{business.name}”'
+                )
+                if report.reporter_id != request.user.id:
+                    reporter_notified = _send_inbox_message(
+                        request.user,
+                        report.reporter,
+                        f"Thank you for reporting {reported_item}. The BlueBase "
+                        "team reviewed it and did not find a violation, so no "
+                        "action was taken.",
+                    )
+
+                if business is not None and business.user_id != request.user.id:
+                    owner_message = (
+                        f'The BlueBase team reviewed a report concerning your '
+                        f'business profile “{business.name}” and did not find '
+                        "a violation. No action was taken against your "
+                        "business profile or listings. The reporter’s identity "
+                        "is not shared."
+                    )
+                    if business.user_id == report.reporter_id:
+                        owner_notified = reporter_notified
+                    else:
+                        owner_notified = _send_inbox_message(
+                            request.user,
+                            business.user,
+                            owner_message,
+                        )
+
+        response_data = ReportSerializer(
+            report,
+            context=self.get_serializer_context(),
+        ).data
+        response_data["reporter_notified"] = reporter_notified
+        response_data["owner_notified"] = owner_notified
+        return Response(response_data)
+
+    @action(detail=True, methods=["post"], url_path="suspend-business")
+    def suspend_business(self, request, pk=None):
+        report = self.get_object()
+        business = report.business
+        if business is None and report.product_id:
+            business = report.product.business
+        if business is None:
+            raise ValidationError("This report is not linked to a business.")
+
+        if business.is_suspended:
+            return Response({
+                "detail": "This business profile is already suspended.",
+                "business_id": business.id,
+                "is_suspended": True,
+                "message_sent": False,
+            })
+
+        owner = business.user
+        message_sent = False
+        reporters_notified = 0
+        with transaction.atomic():
+            business.is_suspended = True
+            business.save(update_fields=["is_suspended"])
+
+            Report.objects.filter(
+                Q(business=business) | Q(product__business=business),
+                review_status=Report.PENDING,
+            ).update(
+                review_status=Report.ACTION_TAKEN,
+                reviewed_at=timezone.now(),
+                reviewed_by=request.user,
+            )
+
+            message_sent = _send_inbox_message(
+                request.user,
+                owner,
+                f'Your business profile “{business.name}” has been '
+                "suspended after an administrator review. This action "
+                "applies to your business profile only; your user account "
+                "remains active. Please contact the BlueBase team if you "
+                "need help.",
+            )
+
+            reporter_ids = Report.objects.filter(
+                Q(business=business) | Q(product__business=business)
+            ).values_list("reporter_id", flat=True).distinct()
+            reporters = User.objects.filter(id__in=reporter_ids).exclude(
+                id=request.user.id
+            )
+            for reporter in reporters:
+                if _send_inbox_message(
+                    request.user,
+                    reporter,
+                    f"Thank you for reporting {business.name}. We investigated "
+                    "the report and suspended the business profile.",
+                ):
+                    reporters_notified += 1
+
+        return Response({
+            "detail": "Business profile suspended.",
+            "business_id": business.id,
+            "is_suspended": True,
+            "message_sent": message_sent,
+            "reporters_notified": reporters_notified,
+        })
+
+    @action(detail=True, methods=["post"], url_path="unsuspend-business")
+    def unsuspend_business(self, request, pk=None):
+        report = self.get_object()
+        business = report.business
+        if business is None and report.product_id:
+            business = report.product.business
+        if business is None:
+            raise ValidationError("This report is not linked to a business.")
+
+        if not business.is_suspended:
+            return Response({
+                "detail": "This business profile is not suspended.",
+                "business_id": business.id,
+                "is_suspended": False,
+                "message_sent": False,
+            })
+
+        with transaction.atomic():
+            business.is_suspended = False
+            business.save(update_fields=["is_suspended"])
+            message_sent = _send_inbox_message(
+                request.user,
+                business.user,
+                f'Your business profile “{business.name}” has been '
+                "unsuspended after an administrator review and is available "
+                "to customers again. Your user account was not suspended.",
+            )
+
+        return Response({
+            "detail": "Business profile unsuspended.",
+            "business_id": business.id,
+            "is_suspended": False,
+            "message_sent": message_sent,
+        })

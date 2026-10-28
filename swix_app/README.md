@@ -1,6 +1,6 @@
-# swix_app
+# BlueBase
 
-A new Flutter project.
+BlueBase is a campus marketplace that helps students discover products and services and contact local businesses.
 
 ## Getting Started
 

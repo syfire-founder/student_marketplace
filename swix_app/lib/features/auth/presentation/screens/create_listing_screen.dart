@@ -31,6 +31,7 @@ class _CreateListingScreenState
   bool _isAvailable = true;
   bool _isPrivate = false;
   bool _isLoading = false;
+  String? _imagesError;
 
   List<_Category> _categories = [];
   int? _categoryId;
@@ -124,6 +125,7 @@ class _CreateListingScreenState
 
       setState(() {
         _selectedImages.addAll(selected);
+        _imagesError = null;
       });
 
       if (images.length > remainingSlots) {
@@ -155,6 +157,9 @@ class _CreateListingScreenState
   void _removeImage(int index) {
     setState(() {
       _selectedImages.removeAt(index);
+      if (_selectedImages.isEmpty) {
+        _imagesError = 'Add at least one listing photo.';
+      }
     });
   }
 
@@ -164,6 +169,11 @@ class _CreateListingScreenState
 
   Future<void> _createListing() async {
     if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
+    if (_selectedImages.isEmpty) {
+      setState(() => _imagesError = 'Add at least one listing photo.');
       return;
     }
 
@@ -182,21 +192,33 @@ class _CreateListingScreenState
 
       final priceText = _priceController.text.trim();
 
-      // -----------------------------------------------------------------------
-      // STEP 1: CREATE PRODUCT
-      // -----------------------------------------------------------------------
-
-      final response = await Dio().post(
-        '${ApiClient.baseUrl}/products/',
-        data: {
+      // Create the listing and upload its required photos together so the
+      // server never saves a listing without its images.
+      final formData = FormData.fromMap({
           'listing_type': _isProduct ? 'product' : 'service',
           'name': _nameController.text.trim(),
           'description': _descriptionController.text.trim(),
-          'price': priceText.isEmpty ? null : priceText,
+          if (priceText.isNotEmpty) 'price': priceText,
           'is_available': _isAvailable,
           'is_private': _isPrivate,
           if (_categoryId != null) 'category': _categoryId,
-        },
+        });
+
+      for (final image in _selectedImages) {
+        formData.files.add(
+          MapEntry(
+            'images',
+            await MultipartFile.fromFile(
+              image.path,
+              filename: image.name,
+            ),
+          ),
+        );
+      }
+
+      final response = await Dio().post(
+        '${ApiClient.baseUrl}/products/',
+        data: formData,
         options: Options(
           headers: {
             'Authorization': 'Token $token',
@@ -219,33 +241,7 @@ class _CreateListingScreenState
       }
 
       // -----------------------------------------------------------------------
-      // STEP 2: UPLOAD IMAGES
-      // -----------------------------------------------------------------------
-
-      for (final image in _selectedImages) {
-        final multipartFile = await MultipartFile.fromFile(
-          image.path,
-          filename: image.name,
-        );
-
-        final formData = FormData.fromMap({
-          'product': productId,
-          'image': multipartFile,
-        });
-
-        await Dio().post(
-          '${ApiClient.baseUrl}/listing-images/',
-          data: formData,
-          options: Options(
-            headers: {
-              'Authorization': 'Token $token',
-            },
-          ),
-        );
-      }
-
-      // -----------------------------------------------------------------------
-      // STEP 3: SUCCESS
+      // STEP 2: SUCCESS
       // -----------------------------------------------------------------------
 
       if (!mounted) return;
@@ -412,6 +408,8 @@ class _CreateListingScreenState
                         ),
                       )
                       .toList(),
+                  validator: (value) =>
+                      value == null ? 'Choose a category' : null,
                   onChanged: _isLoading
                       ? null
                       : (value) {
@@ -439,6 +437,12 @@ class _CreateListingScreenState
                         'Tell students about your listing...',
                     border: OutlineInputBorder(),
                   ),
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Enter a description';
+                    }
+                    return null;
+                  },
                 ),
 
                 const SizedBox(height: 16),
@@ -539,6 +543,19 @@ class _CreateListingScreenState
                             '(${_selectedImages.length}/5)',
                   ),
                 ),
+
+                if (_imagesError != null) ...[
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      _imagesError!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
+                ],
 
                 const SizedBox(height: 16),
 

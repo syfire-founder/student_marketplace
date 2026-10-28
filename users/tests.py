@@ -1,10 +1,123 @@
 from django.contrib.auth.models import User
+from django.db import IntegrityError, transaction
+from unittest.mock import patch
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from .models import BusinessProfile, Product, Category, School
+from .models import (
+    BusinessProfile,
+    Category,
+    Conversation,
+    ConversationPair,
+    Product,
+    School,
+)
 from django.db.models import ProtectedError
 from .models import UserProfile
+
+
+class ConversationDuplicateAPITest(APITestCase):
+
+    def setUp(self):
+        self.first_user = User.objects.create_user(
+            username="conversation_first",
+            password="password123",
+        )
+        self.second_user = User.objects.create_user(
+            username="conversation_second",
+            password="password123",
+        )
+        self.conversations_url = "/api/conversations/"
+
+    def test_repeated_requests_in_either_user_order_reuse_conversation(self):
+        self.client.force_authenticate(user=self.first_user)
+        first_response = self.client.post(
+            self.conversations_url,
+            {"participants": [self.second_user.id]},
+            format="json",
+        )
+
+        self.client.force_authenticate(user=self.second_user)
+        reversed_response = self.client.post(
+            self.conversations_url,
+            {"participants": [self.first_user.id]},
+            format="json",
+        )
+        repeated_response = self.client.post(
+            self.conversations_url,
+            {"participants": [self.first_user.id]},
+            format="json",
+        )
+
+        self.assertEqual(first_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(reversed_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(repeated_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(first_response.data["id"], reversed_response.data["id"])
+        self.assertEqual(first_response.data["id"], repeated_response.data["id"])
+        self.assertEqual(Conversation.objects.count(), 1)
+        self.assertEqual(ConversationPair.objects.count(), 1)
+
+    def test_database_rejects_duplicate_user_pair(self):
+        conversation = Conversation.objects.create()
+        conversation.participants.add(self.first_user, self.second_user)
+        ConversationPair.objects.create(
+            user_low_id=min(self.first_user.id, self.second_user.id),
+            user_high_id=max(self.first_user.id, self.second_user.id),
+            conversation=conversation,
+        )
+
+        duplicate_conversation = Conversation.objects.create()
+        duplicate_conversation.participants.add(
+            self.first_user,
+            self.second_user,
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                ConversationPair.objects.create(
+                    user_low_id=min(self.first_user.id, self.second_user.id),
+                    user_high_id=max(self.first_user.id, self.second_user.id),
+                    conversation=duplicate_conversation,
+                )
+
+    def test_unique_constraint_race_reuses_winning_conversation(self):
+        winning_conversation = Conversation.objects.create()
+        winning_conversation.participants.add(
+            self.first_user,
+            self.second_user,
+        )
+        ConversationPair.objects.create(
+            user_low_id=min(self.first_user.id, self.second_user.id),
+            user_high_id=max(self.first_user.id, self.second_user.id),
+            conversation=winning_conversation,
+        )
+
+        original_filter = ConversationPair.objects.filter
+        filter_calls = 0
+
+        def miss_first_lookup(*args, **kwargs):
+            nonlocal filter_calls
+            filter_calls += 1
+            if filter_calls == 1:
+                return ConversationPair.objects.none()
+            return original_filter(*args, **kwargs)
+
+        self.client.force_authenticate(user=self.first_user)
+        with patch.object(
+            ConversationPair.objects,
+            "filter",
+            side_effect=miss_first_lookup,
+        ):
+            response = self.client.post(
+                self.conversations_url,
+                {"participants": [self.second_user.id]},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], winning_conversation.id)
+        self.assertEqual(Conversation.objects.count(), 1)
+        self.assertEqual(ConversationPair.objects.count(), 1)
 
 class ProductAPITest(APITestCase):
 
@@ -21,7 +134,7 @@ class ProductAPITest(APITestCase):
         )
 
 
-       
+
         # category
         self.category = Category.objects.create(name="Electronics")
 
@@ -165,7 +278,7 @@ class ProductAPITest(APITestCase):
         response = self.client.get(f"/api/products/{private_product.id}/")
 
         self.assertEqual(response.status_code, 404)
-  
+
 
     def test_owner_can_see_own_private_product(self):
         private_product = Product.objects.create(
@@ -197,13 +310,13 @@ class ProductAPITest(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, self.private_product.name)
 
-        """ 
+        """
         self.assertNotIn(
     self.private_product.id,
     [p["id"] for p in response.data["results"]]
 )
 """
-       
+
 
 
         """
@@ -213,4 +326,4 @@ class ProductAPITest(APITestCase):
         self.assertNotContains(response, self.private_product.name)
         """
 
-    
+
