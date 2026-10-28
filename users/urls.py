@@ -1,5 +1,4 @@
 from django.urls import path
-from rest_framework.authtoken.views import obtain_auth_token
 from rest_framework.routers import DefaultRouter
 from django.conf import settings
 from django.conf.urls.static import static
@@ -28,7 +27,16 @@ from .views import (
     SearchView,
     HomeFeedView,
     RecentlyViewedView,
+    RecentlyViewedBusinessesView,
     ReportViewSet,
+    RegularLoginView,
+    AdminLoginView,
+    AdminAnalyticsView,
+    AppVisitView,
+    VerifyRegistrationView,
+    ResendRegistrationCodeView,
+    PasswordResetRequestView,
+    PasswordResetConfirmView,
 )
 #BusinessProfileListCreateView
 #BusinessProfileDetailView,
@@ -78,7 +86,14 @@ router.register(
 )
 urlpatterns = [
     path('auth/register/', RegisterView.as_view(), name='register'),
-    path('auth/login/', obtain_auth_token, name='login'),
+    path('auth/verify-registration/', VerifyRegistrationView.as_view(), name='verify-registration'),
+    path('auth/resend-registration-code/', ResendRegistrationCodeView.as_view(), name='resend-registration-code'),
+    path('auth/password-reset/', PasswordResetRequestView.as_view(), name='password-reset'),
+    path('auth/password-reset/confirm/', PasswordResetConfirmView.as_view(), name='password-reset-confirm'),
+    path('auth/login/', RegularLoginView.as_view(), name='login'),
+    path('auth/admin-login/', AdminLoginView.as_view(), name='admin-login'),
+    path('admin-analytics/', AdminAnalyticsView.as_view(), name='admin-analytics'),
+    path('app-visits/', AppVisitView.as_view(), name='app-visits'),
 
     path(
     "notifications/unread-count/",
@@ -119,6 +134,10 @@ urlpatterns = [
     path(
     "recently-viewed/",
     RecentlyViewedView.as_view(),
+),
+    path(
+    "recently-viewed-businesses/",
+    RecentlyViewedBusinessesView.as_view(),
 ),
 ]
 

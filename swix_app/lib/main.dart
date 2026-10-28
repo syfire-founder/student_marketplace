@@ -5,17 +5,17 @@ import 'core/theme/app_theme.dart';
 import 'features/auth/presentation/screens/splash_screen.dart';
 
 void main() {
-  runApp(const ProviderScope(child: SwixApp()));
+  runApp(const ProviderScope(child: BlueBaseApp()));
 }
 
-class SwixApp extends StatelessWidget {
-  const SwixApp({super.key});
+class BlueBaseApp extends StatelessWidget {
+  const BlueBaseApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Swix',
+      title: 'BlueBase',
       theme: AppTheme.lightTheme,
       home: const SplashScreen(),
     );

@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/auth_state_provider.dart';
 import 'authenticated_screen.dart';
 import 'login_screen.dart';
+import 'admin_reports_screen.dart';
+import '../../../../core/services/token_storage.dart';
 
 class SplashScreen extends ConsumerStatefulWidget {
   const SplashScreen({super.key});
@@ -28,9 +30,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
       if (!mounted) return;
 
       if (next.status == AuthStatus.authenticated) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const AuthenticatedScreen()),
-        );
+        _routeAuthenticatedUser();
       }
 
       if (next.status == AuthStatus.unauthenticated) {
@@ -41,5 +41,17 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
     });
 
     return const Scaffold(body: Center(child: CircularProgressIndicator()));
+  }
+
+  Future<void> _routeAuthenticatedUser() async {
+    final isAdmin = await const TokenStorage().getIsAdmin();
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => isAdmin
+            ? const AdminReportsScreen()
+            : const AuthenticatedScreen(),
+      ),
+    );
   }
 }

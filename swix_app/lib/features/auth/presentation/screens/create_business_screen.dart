@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../../../core/api/api_client.dart';
 import '../../../../core/services/token_storage.dart';
@@ -20,6 +23,7 @@ class _CreateBusinessScreenState extends State<CreateBusinessScreen> {
   late Future<List<_Category>> _categories;
 
   int? _categoryId;
+  XFile? _logoImage;
   bool _isSubmitting = false;
 
   @override
@@ -80,13 +84,17 @@ class _CreateBusinessScreenState extends State<CreateBusinessScreen> {
         throw Exception('Session expired. Please log in again.');
       }
 
+      final requestData = FormData.fromMap({
+        'name': _nameController.text.trim(),
+        'description': _descriptionController.text.trim(),
+        'category': _categoryId,
+        if (_logoImage != null)
+          'logo': await MultipartFile.fromFile(_logoImage!.path),
+      });
+
       final response = await Dio().post(
         '${ApiClient.baseUrl}/businessprofiles/',
-        data: {
-          'name': _nameController.text.trim(),
-          'description': _descriptionController.text.trim(),
-          'category': _categoryId,
-        },
+        data: requestData,
         options: Options(
           headers: {
             'Authorization': 'Token $token',
@@ -140,6 +148,14 @@ class _CreateBusinessScreenState extends State<CreateBusinessScreen> {
     }
   }
 
+  Future<void> _pickLogo() async {
+    final image = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 85,
+    );
+    if (image != null && mounted) setState(() => _logoImage = image);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -178,8 +194,29 @@ class _CreateBusinessScreenState extends State<CreateBusinessScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    Center(
+                      child: Column(
+                        children: [
+                          CircleAvatar(
+                            radius: 42,
+                            backgroundImage: _logoImage == null
+                                ? null
+                                : FileImage(File(_logoImage!.path)),
+                            child: _logoImage == null
+                                ? const Icon(Icons.storefront_outlined, size: 36)
+                                : null,
+                          ),
+                          TextButton.icon(
+                            onPressed: _isSubmitting ? null : _pickLogo,
+                            icon: const Icon(Icons.add_photo_alternate_outlined),
+                            label: Text(_logoImage == null ? 'Add business logo' : 'Change logo'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
                     Text(
-                      'Start selling on SWIX',
+                      'Start selling on BlueBase',
                       style: Theme.of(context)
                           .textTheme
                           .headlineMedium

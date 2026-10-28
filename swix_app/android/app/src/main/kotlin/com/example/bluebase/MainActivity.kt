@@ -1,4 +1,4 @@
-package com.example.swix_app
+package com.example.bluebase
 
 import io.flutter.embedding.android.FlutterActivity
 

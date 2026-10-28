@@ -12,22 +12,54 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from dotenv import load_dotenv
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
+
+from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
+
+
+def _env_bool(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+DEBUG = _env_bool("DEBUG", default=False)
+SECRET_KEY = os.getenv("SECRET_KEY") or (
+    os.getenv("SECRETE_KEY", "") if DEBUG else ""
+)
+if not SECRET_KEY:
+    raise ImproperlyConfigured("Set SECRET_KEY in the environment.")
+if not DEBUG and (
+    SECRET_KEY.startswith("django-insecure-")
+    or "replace-with" in SECRET_KEY.lower()
+    or len(SECRET_KEY) < 50
+    or len(set(SECRET_KEY)) < 5
+):
+    raise ImproperlyConfigured(
+        "Production requires a generated SECRET_KEY, not Django's development key."
+    )
+
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.getenv(
+        "ALLOWED_HOSTS",
+        "127.0.0.1,localhost,10.0.2.2" if DEBUG else "",
+    ).split(",")
+    if host.strip()
+]
+if not DEBUG and (not ALLOWED_HOSTS or "*" in ALLOWED_HOSTS):
+    raise ImproperlyConfigured(
+        "Set ALLOWED_HOSTS to the backend hostnames before production startup."
+    )
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
-
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-+3ckcda^@(saqk_0#4nnj2c@*^docz1+bc3qp0#8v2b6hhdg#q'
-
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-
-ALLOWED_HOSTS = ["127.0.0.1", "localhost", "10.0.2.2"]
-
 
 # Application definition
 
@@ -47,9 +79,9 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    "corsheaders.middleware.CorsMiddleware",
-
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -78,15 +110,69 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 
-# Database
-# https://docs.djangoproject.com/en/5.2/ref/settings/#databases
-
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+# Database. Local development defaults to SQLite; production must use a
+# PostgreSQL DATABASE_URL so the hosted database is persistent and managed.
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+if not DATABASE_URL:
+    if not DEBUG:
+        raise ImproperlyConfigured("Set DATABASE_URL before production startup.")
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
     }
-}
+else:
+    parsed_database_url = urlparse(DATABASE_URL)
+    database_scheme = parsed_database_url.scheme.lower()
+    if database_scheme in {"sqlite", "sqlite3"}:
+        database_path = unquote(parsed_database_url.path)
+        if not database_path or database_path == "/":
+            database_name = BASE_DIR / "db.sqlite3"
+        else:
+            if os.name == "nt" and len(database_path) > 2 and database_path[0] == "/" and database_path[2] == ":":
+                database_path = database_path[1:]
+            elif database_path.startswith("//"):
+                database_path = database_path[1:]
+            elif database_path.startswith("/"):
+                database_path = database_path.lstrip("/")
+            database_name = Path(database_path)
+            if not database_name.is_absolute():
+                database_name = BASE_DIR / database_name
+        if not DEBUG:
+            raise ImproperlyConfigured(
+                "Production must use PostgreSQL; SQLite is only for local development."
+            )
+        DATABASES = {
+            "default": {
+                "ENGINE": "django.db.backends.sqlite3",
+                "NAME": database_name,
+            }
+        }
+    elif database_scheme in {"postgres", "postgresql", "postgresql+psycopg"}:
+        if not parsed_database_url.hostname or not parsed_database_url.path.strip("/"):
+            raise ImproperlyConfigured("DATABASE_URL must include a PostgreSQL host and database name.")
+        database_options = {
+            name: values[-1]
+            for name, values in parse_qs(parsed_database_url.query).items()
+        }
+        DATABASES = {
+            "default": {
+                "ENGINE": "django.db.backends.postgresql",
+                "NAME": unquote(parsed_database_url.path.lstrip("/")),
+                "USER": unquote(parsed_database_url.username or ""),
+                "PASSWORD": unquote(parsed_database_url.password or ""),
+                "HOST": parsed_database_url.hostname,
+                "PORT": parsed_database_url.port or "5432",
+                "OPTIONS": database_options,
+                "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "60")),
+                "CONN_HEALTH_CHECKS": True,
+            }
+        }
+    else:
+        raise ImproperlyConfigured(
+            "DATABASE_URL must use sqlite:/// locally or a PostgreSQL URL in production."
+        )
 
 
 # Password validation
@@ -123,7 +209,16 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -158,27 +253,66 @@ REST_FRAMEWORK = {
 
 
 
-load_dotenv()
-
-SECRET_KEY = os.getenv("SECRETE_KEY")
-DEBUG = os.getenv("DEBUG") == "True"
-DATABASES_URL = os.getenv("DATABASE_URL")
-
-if not DATABASES_URL:
-    raise Exception("DATABASE_URL not set in enviroment")
-
-DATABASES = {
-    "default":{
-        "ENGINE":
-"django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
-    }
-}
-
-
-
-
 MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", str(BASE_DIR / "media")))
 
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
+SECURE_SSL_REDIRECT = _env_bool("SECURE_SSL_REDIRECT", default=not DEBUG)
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "0"))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS")
+SECURE_HSTS_PRELOAD = _env_bool("SECURE_HSTS_PRELOAD")
+if _env_bool("TRUST_PROXY_SSL_HEADER"):
+    # Enable only when the chosen hosting proxy sets and sanitizes this header.
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# Email delivery through SendGrid SMTP. Until both the API key and a verified
+# sender are configured, development email is printed in the runserver console.
+EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.sendgrid.net")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True").lower() in ("1", "true", "yes")
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "apikey")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+DEFAULT_FROM_EMAIL = os.getenv(
+    "DEFAULT_FROM_EMAIL",
+    "BlueBase <no-reply@localhost>",
+)
+_SENDGRID_READY = bool(
+    EMAIL_HOST_PASSWORD
+    and os.getenv("DEFAULT_FROM_EMAIL")
+    and "replace-with" not in EMAIL_HOST_PASSWORD.lower()
+    and "replace-with" not in DEFAULT_FROM_EMAIL.lower()
+)
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND",
+    "django.core.mail.backends.smtp.EmailBackend"
+    if _SENDGRID_READY
+    else "django.core.mail.backends.console.EmailBackend",
+)
+if not DEBUG and (
+    EMAIL_BACKEND == "django.core.mail.backends.console.EmailBackend"
+    or DEFAULT_FROM_EMAIL.endswith("@localhost")
+    or "replace-with" in DEFAULT_FROM_EMAIL.lower()
+    or (
+        EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend"
+        and (
+            not EMAIL_HOST_PASSWORD
+            or "replace-with" in EMAIL_HOST_PASSWORD.lower()
+        )
+    )
+):
+    raise ImproperlyConfigured(
+        "Configure a real email backend and verified sender before production startup."
+    )

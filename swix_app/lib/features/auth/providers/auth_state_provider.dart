@@ -82,12 +82,26 @@ class AuthController extends Notifier<AuthState> {
         school: school,
       );
 
-      state = state.copyWith(status: AuthStatus.authenticated);
+      state = state.copyWith(status: AuthStatus.unauthenticated);
     } catch (e) {
       state = state.copyWith(
         status: AuthStatus.error,
         errorMessage: e.toString(),
       );
+    }
+  }
+
+  Future<void> verifyRegistration({
+    required String email,
+    required String code,
+  }) async {
+    state = state.copyWith(status: AuthStatus.loading, errorMessage: null);
+    try {
+      final repository = ref.read(authRepositoryProvider);
+      await repository.verifyRegistration(email: email, code: code);
+      state = state.copyWith(status: AuthStatus.authenticated);
+    } catch (e) {
+      state = state.copyWith(status: AuthStatus.error, errorMessage: e.toString());
     }
   }
 

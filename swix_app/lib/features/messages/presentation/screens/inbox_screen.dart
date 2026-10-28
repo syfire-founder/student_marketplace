@@ -6,7 +6,9 @@ import '../../../../core/services/token_storage.dart';
 import 'chat_screen.dart';
 
 class InboxScreen extends StatefulWidget {
-  const InboxScreen({super.key});
+  const InboxScreen({super.key, this.onUnreadMessagesChanged});
+
+  final VoidCallback? onUnreadMessagesChanged;
 
   @override
   State<InboxScreen> createState() => _InboxScreenState();
@@ -33,11 +35,17 @@ class _InboxScreenState extends State<InboxScreen> {
     return items.map((item) => Map<String, dynamic>.from(item as Map)).toList();
   }
 
+
+
   Future<void> _refresh() async {
-    final conversations = _loadConversations();
-    setState(() => _conversations = conversations);
-    await conversations;
+    setState(() {
+      _conversations = _loadConversations();
+    });
+
+    await _conversations;
+    widget.onUnreadMessagesChanged?.call();
   }
+
 
   Future<void> _markConversationRead(int conversationId) async {
     final token = await const TokenStorage().getToken();
@@ -113,6 +121,7 @@ class _InboxScreenState extends State<InboxScreen> {
                       : () async {
                           if (unreadCount > 0) {
                             setState(() => conversation['unread_count'] = 0);
+                            widget.onUnreadMessagesChanged?.call();
                             _markConversationRead(id).catchError((_) {});
                           }
                           await Navigator.of(context).push(

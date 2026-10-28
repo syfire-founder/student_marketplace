@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/auth_state_provider.dart';
 import 'authenticated_screen.dart';
 import 'register_screen.dart';
+import 'admin_login_screen.dart';
+import 'account_recovery_screen.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -64,7 +66,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   children: [
                     const SizedBox(height: 40),
                     const Text(
-                      'Swix',
+                      'BlueBase',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 42,
@@ -128,7 +130,32 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             : const Text('Log in'),
                       ),
                     ),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: isLoading
+                            ? null
+                            : () => Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => const AccountRecoveryScreen(),
+                                  ),
+                                ),
+                        child: const Text('Forgot password?'),
+                      ),
+                    ),
                     const SizedBox(height: 24),
+                    TextButton.icon(
+                      onPressed: isLoading
+                          ? null
+                          : () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => const AdminLoginScreen(),
+                              ),
+                            ),
+                      icon: const Icon(Icons.admin_panel_settings_outlined),
+                      label: const Text('Administrator sign in'),
+                    ),
+                    const SizedBox(height: 8),
                     TextButton(
                       onPressed: isLoading
                           ? null
