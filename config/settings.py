@@ -287,7 +287,7 @@ EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "apikey")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 DEFAULT_FROM_EMAIL = os.getenv(
     "DEFAULT_FROM_EMAIL",
-    "BlueBase <no-reply@localhost>",
+    "BluuBase <no-reply@localhost>",
 )
 _SENDGRID_READY = bool(
     EMAIL_HOST_PASSWORD

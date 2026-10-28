@@ -66,7 +66,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   children: [
                     const SizedBox(height: 40),
                     const Text(
-                      'BlueBase',
+                      'BluuBase',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 42,

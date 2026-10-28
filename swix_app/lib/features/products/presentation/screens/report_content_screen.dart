@@ -88,7 +88,7 @@ class _ReportContentScreenState extends State<ReportContentScreen> {
               ),
               const SizedBox(height: 12),
               const Text(
-                'Your report will be sent privately to the BlueBase administrators for review.',
+                'Your report will be sent privately to the BluuBase administrators for review.',
               ),
               const SizedBox(height: 20),
               TextFormField(

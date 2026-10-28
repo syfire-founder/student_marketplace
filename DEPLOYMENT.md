@@ -1,4 +1,4 @@
-# BlueBase backend release preparation
+# BluuBase backend release preparation
 
 The Django project is prepared for a Linux WSGI host, but it is not deployed.
 Choose a hosting provider and configure its environment variables before
@@ -12,7 +12,7 @@ Set these values in the hosting provider's private environment settings:
   local development key.
 - `DEBUG=False`
 - `ALLOWED_HOSTS`: comma-separated hostnames only, such as the provider host
-  and BlueBase API domain. Do not use `*`.
+  and BluuBase API domain. Do not use `*`.
 - `DATABASE_URL`: a managed PostgreSQL connection URL. Production settings
   reject SQLite so the app cannot silently use an ephemeral local database.
 - `SECURE_SSL_REDIRECT=True`
@@ -20,7 +20,7 @@ Set these values in the hosting provider's private environment settings:
   and sets a sanitized `X-Forwarded-Proto` header.
 - `CSRF_TRUSTED_ORIGINS`: full HTTPS origins for any browser-based admin or
   frontend.
-- `CORS_ALLOWED_ORIGINS`: full HTTPS origins only if BlueBase serves a browser
+- `CORS_ALLOWED_ORIGINS`: full HTTPS origins only if BluuBase serves a browser
   frontend. Native Android and iOS apps do not use browser CORS.
 - `SECURE_HSTS_SECONDS`: enable after HTTPS is confirmed on the final domain;
   start with a short value and increase it after verification.
