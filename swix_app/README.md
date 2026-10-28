@@ -1,6 +1,6 @@
-# BlueBase
+# BluuBase
 
-BlueBase is a campus marketplace that helps students discover products and services and contact local businesses.
+BluuBase is a campus marketplace that helps students discover products and services and contact local businesses.
 
 ## Getting Started
 

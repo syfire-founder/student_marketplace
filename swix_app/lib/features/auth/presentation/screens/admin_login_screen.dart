@@ -86,7 +86,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                         size: 64, color: colors.primary),
                     const SizedBox(height: 16),
                     Text(
-                      'BlueBase administration',
+                      'BluuBase administration',
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.headlineSmall,
                     ),

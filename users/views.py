@@ -139,7 +139,7 @@ def _send_inbox_message(sender, recipient, text):
         recipient=recipient,
         sender=sender,
         notification_type=Notification.MESSAGE,
-        message="You received a message from the BlueBase team.",
+        message="You received a message from the BluuBase team.",
         conversation=conversation,
     )
     return True
@@ -222,7 +222,7 @@ class BusinessProfileViewSet(viewsets.ModelViewSet):
         )
         _send_short_email(
             self.request.user.email,
-            "Your BlueBase business profile is ready",
+            "Your BluuBase business profile is ready",
             f"Hi {self.request.user.username}, your business profile “{business.name}” "
             "has been created. You can now add products or services for students to find.",
         )
@@ -347,8 +347,8 @@ class RegisterView(APIView):
 
         sent = _send_short_email(
             email,
-            "Your BlueBase registration code",
-            f"Your BlueBase registration code is {code}. It expires in 10 minutes. "
+            "Your BluuBase registration code",
+            f"Your BluuBase registration code is {code}. It expires in 10 minutes. "
             "If you did not request this, you can ignore this email.",
         )
         if not sent:
@@ -402,8 +402,8 @@ class VerifyRegistrationView(APIView):
 
         _send_short_email(
             user.email,
-            "Welcome to BlueBase",
-            f"Hi {user.username}, your BlueBase account is ready. You can now discover "
+            "Welcome to BluuBase",
+            f"Hi {user.username}, your BluuBase account is ready. You can now discover "
             "campus businesses, save listings, and message sellers.",
         )
         return Response(
@@ -433,8 +433,8 @@ class ResendRegistrationCodeView(APIView):
         pending.save(update_fields=["code_hash", "expires_at", "attempts"])
         if not _send_short_email(
             email,
-            "Your new BlueBase registration code",
-            f"Your new BlueBase registration code is {code}. It expires in 10 minutes.",
+            "Your new BluuBase registration code",
+            f"Your new BluuBase registration code is {code}. It expires in 10 minutes.",
         ):
             return Response(
                 {"detail": "We could not send your code right now. Please try again shortly."},
@@ -469,8 +469,8 @@ class PasswordResetRequestView(APIView):
                 recovery.save(update_fields=["code_hash", "expires_at", "attempts"])
                 if _send_short_email(
                     user.email,
-                    "Reset your BlueBase password",
-                    f"Your BlueBase password reset code is {code}. It expires in 10 minutes. "
+                    "Reset your BluuBase password",
+                    f"Your BluuBase password reset code is {code}. It expires in 10 minutes. "
                     "If you did not request this, ignore this email.",
                 ):
                     recovery.last_sent_at = now
@@ -1539,7 +1539,7 @@ class ReportViewSet(viewsets.ModelViewSet):
                 _send_inbox_message(
                     admin_sender,
                     self.request.user,
-                    f"Thank you for reporting {reported_item}. The BlueBase "
+                    f"Thank you for reporting {reported_item}. The BluuBase "
                     "team has received your report and will investigate it.",
                 )
 
@@ -1576,14 +1576,14 @@ class ReportViewSet(viewsets.ModelViewSet):
                     reporter_notified = _send_inbox_message(
                         request.user,
                         report.reporter,
-                        f"Thank you for reporting {reported_item}. The BlueBase "
+                        f"Thank you for reporting {reported_item}. The BluuBase "
                         "team reviewed it and did not find a violation, so no "
                         "action was taken.",
                     )
 
                 if business is not None and business.user_id != request.user.id:
                     owner_message = (
-                        f'The BlueBase team reviewed a report concerning your '
+                        f'The BluuBase team reviewed a report concerning your '
                         f'business profile “{business.name}” and did not find '
                         "a violation. No action was taken against your "
                         "business profile or listings. The reporter’s identity "
@@ -1645,7 +1645,7 @@ class ReportViewSet(viewsets.ModelViewSet):
                 f'Your business profile “{business.name}” has been '
                 "suspended after an administrator review. This action "
                 "applies to your business profile only; your user account "
-                "remains active. Please contact the BlueBase team if you "
+                "remains active. Please contact the BluuBase team if you "
                 "need help.",
             )
 

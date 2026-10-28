@@ -216,7 +216,7 @@ class _CreateBusinessScreenState extends State<CreateBusinessScreen> {
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      'Start selling on BlueBase',
+                      'Start selling on BluuBase',
                       style: Theme.of(context)
                           .textTheme
                           .headlineMedium

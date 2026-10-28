@@ -1060,7 +1060,7 @@ class _ProfileTab extends ConsumerWidget {
                 child: Icon(Icons.person),
               ),
               title: const Text(
-                'Your BlueBase account',
+                'Your BluuBase account',
               ),
               subtitle: const Text(
                 'Campus marketplace member',

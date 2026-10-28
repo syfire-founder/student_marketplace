@@ -1,4 +1,4 @@
-package com.example.bluebase
+package com.example.bluubase
 
 import io.flutter.embedding.android.FlutterActivity
 
