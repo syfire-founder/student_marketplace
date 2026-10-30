@@ -280,6 +280,8 @@ if _env_bool("TRUST_PROXY_SSL_HEADER"):
 
 # Email delivery through SendGrid SMTP. Until both the API key and a verified
 # sender are configured, development email is printed in the runserver console.
+EMAIL_NOTIFICATIONS_ENABLED = _env_bool("EMAIL_NOTIFICATIONS_ENABLED", default=True)
+REQUIRE_EMAIL_VERIFICATION = _env_bool("REQUIRE_EMAIL_VERIFICATION", default=True)
 EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.sendgrid.net")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
 EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True").lower() in ("1", "true", "yes")
@@ -301,7 +303,7 @@ EMAIL_BACKEND = os.getenv(
     if _SENDGRID_READY
     else "django.core.mail.backends.console.EmailBackend",
 )
-if not DEBUG and (
+if not DEBUG and EMAIL_NOTIFICATIONS_ENABLED and (
     EMAIL_BACKEND == "django.core.mail.backends.console.EmailBackend"
     or DEFAULT_FROM_EMAIL.endswith("@localhost")
     or "replace-with" in DEFAULT_FROM_EMAIL.lower()

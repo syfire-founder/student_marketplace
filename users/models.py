@@ -222,6 +222,57 @@ class BusinessFollow(models.Model):
         return f"{self.user.username} follows {self.business.name}"
 
 
+class CommunityMembership(models.Model):
+    """A user who joined a business community while following that business."""
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="community_memberships",
+    )
+    business = models.ForeignKey(
+        BusinessProfile,
+        on_delete=models.CASCADE,
+        related_name="community_memberships",
+    )
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "business"],
+                name="unique_community_membership",
+            )
+        ]
+
+
+class CommunityPost(models.Model):
+    IMAGE = "image"
+    VIDEO = "video"
+    MEDIA_TYPES = [(IMAGE, "Image"), (VIDEO, "Video")]
+
+    business = models.ForeignKey(
+        BusinessProfile,
+        on_delete=models.CASCADE,
+        related_name="community_posts",
+    )
+    author = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="community_posts",
+    )
+    message = models.TextField(blank=True)
+    media = models.FileField(upload_to="community_posts/", blank=True, null=True)
+    media_type = models.CharField(max_length=10, choices=MEDIA_TYPES, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.business.name} community update ({self.pk})"
+
+
 class ProductView(models.Model):
     product = models.ForeignKey(
         Product,
@@ -360,7 +411,19 @@ class Message(models.Model):
         related_name="sent_messages"
     )
 
-    text = models.TextField()
+    text = models.TextField(blank=True)
+
+    attachment = models.FileField(
+        upload_to="message_attachments/",
+        blank=True,
+        null=True,
+    )
+
+    attachment_type = models.CharField(
+        max_length=10,
+        choices=[("photo", "Photo"), ("video", "Video")],
+        blank=True,
+    )
 
     is_read = models.BooleanField(default=False)
 

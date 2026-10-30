@@ -75,14 +75,18 @@ class AuthController extends Notifier<AuthState> {
     try {
       final repository = ref.read(authRepositoryProvider);
 
-      await repository.register(
+      final registrationComplete = await repository.register(
         username: username,
         email: email,
         password: password,
         school: school,
       );
 
-      state = state.copyWith(status: AuthStatus.unauthenticated);
+      state = state.copyWith(
+        status: registrationComplete
+            ? AuthStatus.authenticated
+            : AuthStatus.unauthenticated,
+      );
     } catch (e) {
       state = state.copyWith(
         status: AuthStatus.error,

@@ -22,6 +22,8 @@ from .views import (
     MessageViewSet,
     ProductFavoriteViewSet,
     BusinessFollowViewSet,
+    CommunityViewSet,
+    CommunityPostViewSet,
     NotificationViewSet,
     UnreadNotificationCountView,
     SearchView,
@@ -73,6 +75,16 @@ router.register(
     r"business-follows",
     BusinessFollowViewSet,
     basename="business-follow"
+)
+router.register(
+    r"communities",
+    CommunityViewSet,
+    basename="community",
+)
+router.register(
+    r"community-posts",
+    CommunityPostViewSet,
+    basename="community-post",
 )
 router.register(
     r"notifications",

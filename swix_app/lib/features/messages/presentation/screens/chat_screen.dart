@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:video_player/video_player.dart';
 
 import '../../../../core/api/api_client.dart';
 import '../../../../core/services/token_storage.dart';
@@ -32,13 +35,18 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _composer = TextEditingController();
   final _scrollController = ScrollController();
+  final _imagePicker = ImagePicker();
 
   late final Dio _dio;
+  Map<String, String> _attachmentHeaders = const {};
   Timer? _refreshTimer;
   int? _pendingProductId;
   String? _pendingProductName;
   String? _pendingProductImage;
   Map<String, dynamic>? _replyToMessage;
+  XFile? _selectedAttachment;
+  String? _selectedAttachmentType;
+  Uint8List? _selectedAttachmentPreview;
 
   List<Map<String, dynamic>> _messages = [];
   bool _isLoading = true;
@@ -78,11 +86,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<Options> _authorizedOptions() async {
     final token = await const TokenStorage().getToken();
+    _attachmentHeaders = {'Authorization': 'Token $token'};
 
     return Options(
-      headers: {
-        'Authorization': 'Token $token',
-      },
+      headers: _attachmentHeaders,
     );
   }
 
@@ -272,14 +279,117 @@ class _ChatScreenState extends State<ChatScreen> {
 
 
 
+  Future<void> _chooseAttachment() async {
+    final type = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_outlined),
+              title: const Text('Send a photo'),
+              onTap: () => Navigator.pop(context, 'photo'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.videocam_outlined),
+              title: const Text('Send a video'),
+              onTap: () => Navigator.pop(context, 'video'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (type == null || !mounted) return;
+
+    final file = type == 'photo'
+        ? await _imagePicker.pickImage(
+            source: ImageSource.gallery,
+            imageQuality: 85,
+          )
+        : await _imagePicker.pickVideo(
+            source: ImageSource.gallery,
+            maxDuration: const Duration(minutes: 3),
+          );
+    if (file == null || !mounted) return;
+
+    if (await file.length() > 50 * 1024 * 1024) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Photos and videos must be 50 MB or smaller.')),
+        );
+      }
+      return;
+    }
+
+    final preview = type == 'photo' ? await file.readAsBytes() : null;
+    if (!mounted) return;
+    setState(() {
+      _selectedAttachment = file;
+      _selectedAttachmentType = type;
+      _selectedAttachmentPreview = preview;
+    });
+  }
+
+  Widget _buildAttachmentPreview(BuildContext context) {
+    final file = _selectedAttachment;
+    if (file == null) return const SizedBox.shrink();
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: SizedBox(
+              width: 54,
+              height: 54,
+              child: _selectedAttachmentType == 'photo' &&
+                      _selectedAttachmentPreview != null
+                  ? Image.memory(_selectedAttachmentPreview!, fit: BoxFit.cover)
+                  : ColoredBox(
+                      color: colorScheme.primaryContainer,
+                      child: Icon(
+                        Icons.videocam_outlined,
+                        color: colorScheme.onPrimaryContainer,
+                      ),
+                    ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              file.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+          IconButton(
+            tooltip: 'Remove attachment',
+            onPressed: () => setState(() {
+              _selectedAttachment = null;
+              _selectedAttachmentType = null;
+              _selectedAttachmentPreview = null;
+            }),
+            icon: const Icon(Icons.close),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _sendMessage() async {
-    debugPrint('SEND BUTTON TAPPED');
     final text = _composer.text.trim();
-    debugPrint('MESSAGE TEXT: $text');
 
-  // Keep the rest of your existing function unchanged.
-
-    if (text.isEmpty || _isSending) {
+    final attachment = _selectedAttachment;
+    final attachmentType = _selectedAttachmentType;
+    if ((text.isEmpty && attachment == null) || _isSending) {
       return;
     }
 
@@ -292,19 +402,33 @@ class _ChatScreenState extends State<ChatScreen> {
     });
 
     try {
+      final data = attachment == null
+          ? {
+              'conversation': widget.conversationId,
+              'text': text,
+              if (productId != null) 'product': productId,
+              if (replyToMessage != null) 'reply_to': replyToMessage['id'],
+            }
+          : FormData.fromMap({
+              'conversation': widget.conversationId,
+              'text': text,
+              'attachment_type': attachmentType,
+              if (productId != null) 'product': productId,
+              if (replyToMessage != null) 'reply_to': replyToMessage['id'],
+              'attachment_upload': await MultipartFile.fromFile(
+                attachment.path,
+                filename: attachment.name,
+              ),
+            });
       await _dio.post(
         '/messages/',
-        data: {
-          'conversation': widget.conversationId,
-          'text': text,
-          if (productId != null) 'product': productId,
-          if (replyToMessage != null) 'reply_to': replyToMessage['id'],
-        },
+        data: data,
         options: await _authorizedOptions(),
       );
 
       _composer.clear();
-      if (mounted && (productId != null || replyToMessage != null)) {
+      if (mounted &&
+          (productId != null || replyToMessage != null || attachment != null)) {
         setState(() {
           if (productId != null && _pendingProductId == productId) {
             _pendingProductId = null;
@@ -314,6 +438,11 @@ class _ChatScreenState extends State<ChatScreen> {
           if (replyToId != null &&
               _replyToMessage?['id']?.toString() == replyToId) {
             _replyToMessage = null;
+          }
+          if (attachment != null && _selectedAttachment?.path == attachment.path) {
+            _selectedAttachment = null;
+            _selectedAttachmentType = null;
+            _selectedAttachmentPreview = null;
           }
         });
       }
@@ -462,6 +591,9 @@ class _ChatScreenState extends State<ChatScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (_selectedAttachment != null) ...[
+                    _buildAttachmentPreview(context),
+                  ],
                   if (_replyToMessage != null) ...[
                     _buildReplyPreview(context),
                     const SizedBox(height: 8),
@@ -473,16 +605,39 @@ class _ChatScreenState extends State<ChatScreen> {
                   Row(
                     children: [
                       Expanded(
-                        child: TextField(
-                          controller: _composer,
-                          minLines: 1,
-                          maxLines: 4,
-                          textCapitalization:
-                              TextCapitalization.sentences,
-                          onSubmitted: (_) => _sendMessage(),
-                          decoration: const InputDecoration(
-                            hintText: 'Write a message',
-                            border: OutlineInputBorder(),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.surface,
+                            borderRadius: BorderRadius.circular(28),
+                            border: Border.all(
+                              color: Theme.of(context).colorScheme.outlineVariant,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              IconButton(
+                                onPressed: _isSending ? null : _chooseAttachment,
+                                tooltip: 'Attach a photo or video',
+                                icon: const Icon(Icons.add),
+                              ),
+                              Expanded(
+                                child: TextField(
+                                  controller: _composer,
+                                  minLines: 1,
+                                  maxLines: 4,
+                                  textCapitalization: TextCapitalization.sentences,
+                                  onSubmitted: (_) => _sendMessage(),
+                                  decoration: const InputDecoration(
+                                    hintText: 'Write a message',
+                                    border: InputBorder.none,
+                                    contentPadding: EdgeInsets.symmetric(
+                                      vertical: 12,
+                                      horizontal: 2,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ),
@@ -640,6 +795,7 @@ class _ChatScreenState extends State<ChatScreen> {
           },
           child: _MessageBubble(
             message: message,
+            attachmentHeaders: _attachmentHeaders,
           ),
         );
       },
@@ -651,9 +807,11 @@ class _ChatScreenState extends State<ChatScreen> {
 class _MessageBubble extends StatelessWidget {
   const _MessageBubble({
     required this.message,
+    required this.attachmentHeaders,
   });
 
   final Map<String, dynamic> message;
+  final Map<String, String> attachmentHeaders;
 
   @override
   Widget build(BuildContext context) {
@@ -661,6 +819,9 @@ class _MessageBubble extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     final productName = message['product_name']?.toString().trim();
     final productImage = message['product_image']?.toString().trim();
+    final attachment = message['attachment']?.toString().trim();
+    final attachmentType = message['attachment_type']?.toString();
+    final text = message['text']?.toString() ?? '';
     final replyText = message['reply_to_text']?.toString().trim();
     final replySender = message['reply_to_sender']?.toString().trim();
 
@@ -773,11 +934,146 @@ class _MessageBubble extends StatelessWidget {
               ),
               const SizedBox(height: 6),
             ],
-            Text(
-              message['text']?.toString() ?? '',
-            ),
+            if (attachment != null && attachment.isNotEmpty) ...[
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: attachmentType == 'video'
+                    ? SizedBox(
+                        width: 272,
+                        child: _MessageVideo(
+                          url: attachment,
+                          httpHeaders: attachmentHeaders,
+                        ),
+                      )
+                    : CachedNetworkImage(
+                        imageUrl: attachment,
+                        httpHeaders: attachmentHeaders,
+                        width: 272,
+                        height: 190,
+                        fit: BoxFit.cover,
+                        placeholder: (context, url) => ColoredBox(
+                          color: colorScheme.surfaceContainerHighest,
+                          child: const SizedBox(
+                            height: 190,
+                            child: Center(
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ),
+                        ),
+                        errorWidget: (context, url, error) => ColoredBox(
+                          color: colorScheme.surfaceContainerHighest,
+                          child: SizedBox(
+                            height: 150,
+                            child: Icon(
+                              Icons.broken_image_outlined,
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ),
+              ),
+              if (text.isNotEmpty) const SizedBox(height: 8),
+            ],
+            if (text.isNotEmpty) Text(text),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _MessageVideo extends StatefulWidget {
+  const _MessageVideo({required this.url, required this.httpHeaders});
+
+  final String url;
+  final Map<String, String> httpHeaders;
+
+  @override
+  State<_MessageVideo> createState() => _MessageVideoState();
+}
+
+class _MessageVideoState extends State<_MessageVideo> {
+  late final VideoPlayerController _controller;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.networkUrl(
+      Uri.parse(widget.url),
+      httpHeaders: widget.httpHeaders,
+    )
+      ..initialize().then((_) {
+        if (mounted) setState(() {});
+      }).catchError((_) {
+        if (mounted) setState(() => _error = 'Video could not be loaded.');
+      });
+    _controller.addListener(_onVideoChanged);
+  }
+
+  void _onVideoChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_onVideoChanged);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_error != null) {
+      return SizedBox(
+        height: 160,
+        child: Center(child: Text(_error!)),
+      );
+    }
+    if (!_controller.value.isInitialized) {
+      return const SizedBox(
+        height: 160,
+        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      );
+    }
+    return GestureDetector(
+      onTap: () => setState(() {
+        _controller.value.isPlaying ? _controller.pause() : _controller.play();
+      }),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          AspectRatio(
+            aspectRatio: _controller.value.aspectRatio,
+            child: VideoPlayer(_controller),
+          ),
+          DecoratedBox(
+            decoration: const BoxDecoration(
+              color: Colors.black45,
+              shape: BoxShape.circle,
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Icon(
+                _controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
+                color: Colors.white,
+                size: 32,
+              ),
+            ),
+          ),
+          Positioned(
+            left: 8,
+            right: 8,
+            bottom: 4,
+            child: VideoProgressIndicator(
+              _controller,
+              allowScrubbing: true,
+              colors: VideoProgressColors(
+                playedColor: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

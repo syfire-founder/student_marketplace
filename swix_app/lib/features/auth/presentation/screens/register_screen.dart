@@ -283,7 +283,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
             height: 52,
             child: FilledButton(
               onPressed: isLoading ? null : _register,
-              child: isLoading ? const CircularProgressIndicator() : const Text('Continue to email verification'),
+              child: isLoading ? const CircularProgressIndicator() : const Text('Create account'),
             ),
           ),
         ],
