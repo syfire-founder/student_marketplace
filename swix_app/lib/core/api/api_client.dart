@@ -1,8 +1,12 @@
 import 'package:dio/dio.dart';
 
 class ApiClient {
-  // Android emulator address for the backend running on your computer.
-  static const String baseUrl = 'http://10.0.2.2:8000/api';
+  // Defaults to the Android emulator's local Django server. Set API_BASE_URL
+  // with --dart-define for a real-device build, e.g. https://api.example.com/api.
+  static const String baseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://10.0.2.2:8000/api',
+  );
 
   final Dio dio;
 

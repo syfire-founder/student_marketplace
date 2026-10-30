@@ -14,6 +14,9 @@ staticfiles/
 # Environment variables
 .env
 
+# Temporary database/media exports can contain user data and login tokens.
+private-test-backup/
+
 # VS Code
 .vscode/
 

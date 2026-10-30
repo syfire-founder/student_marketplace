@@ -33,7 +33,7 @@ class AuthRepository {
     }
   }
 
-  Future<String> register({
+  Future<bool> register({
     required String username,
     required String email,
     required String password,
@@ -50,7 +50,15 @@ class AuthRepository {
         },
       );
 
-      return response.data['detail']?.toString() ?? 'Code sent.';
+      final token = response.data['token']?.toString();
+      if (token != null && token.isNotEmpty) {
+        await tokenStorage.saveToken(
+          token,
+          isAdmin: response.data['is_admin'] == true,
+        );
+        return true;
+      }
+      return false;
     } on DioException catch (e) {
       throw Exception(_extractError(e));
     }

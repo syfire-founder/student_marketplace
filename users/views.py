@@ -57,8 +57,14 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from django.db.models import Count
 from django.shortcuts import get_object_or_404
-from .models import Conversation, Message, BusinessFollow, ConversationPair
-from .serializers import ConversationSerializer, MessageSerializer
+from .models import (
+    Conversation, Message, BusinessFollow, ConversationPair,
+    CommunityMembership, CommunityPost,
+)
+from .serializers import (
+    ConversationSerializer, MessageSerializer,
+    CommunitySerializer, CommunityPostSerializer,
+)
 from .utils import create_notification
 from .serializers import ProductFavoriteSerializer
 from .serializers import BusinessFollowSerializer
@@ -69,6 +75,8 @@ from .pagination import MarketplacePagination
 from .models import Report
 from .serializers import ReportSerializer
 from django.db import transaction, IntegrityError
+from django.http import FileResponse
+import mimetypes
 
 
 logger = logging.getLogger(__name__)
@@ -79,6 +87,8 @@ def _create_email_code():
 
 
 def _send_short_email(to_email, subject, message):
+    if not settings.EMAIL_NOTIFICATIONS_ENABLED:
+        return True
     if not to_email:
         return False
     try:
@@ -301,6 +311,23 @@ class RegisterView(APIView):
         except DjangoValidationError as error:
             raise ValidationError({"password": error.messages})
 
+        if not settings.REQUIRE_EMAIL_VERIFICATION:
+            with transaction.atomic():
+                serializer.validated_data["username"] = username
+                serializer.validated_data["email"] = email
+                user = serializer.save()
+                token, _ = Token.objects.get_or_create(user=user)
+            return Response(
+                {"token": token.key, "is_admin": False},
+                status=status.HTTP_201_CREATED,
+            )
+
+        if not settings.EMAIL_NOTIFICATIONS_ENABLED:
+            return Response(
+                {"detail": "Email verification is not available right now."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
         now = timezone.now()
         PendingRegistration.objects.filter(expires_at__lte=now).delete()
         pending = PendingRegistration.objects.filter(email__iexact=email).first()
@@ -368,6 +395,11 @@ class VerifyRegistrationView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
+        if not settings.REQUIRE_EMAIL_VERIFICATION:
+            return Response(
+                {"detail": "Email verification is disabled for this test release."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         email = str(request.data.get("email", "")).strip().lower()
         code = str(request.data.get("code", "")).strip()
         if not email or not code:
@@ -416,6 +448,11 @@ class ResendRegistrationCodeView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
+        if not settings.REQUIRE_EMAIL_VERIFICATION:
+            return Response(
+                {"detail": "Email verification is disabled for this test release."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         email = str(request.data.get("email", "")).strip().lower()
         pending = PendingRegistration.objects.filter(email__iexact=email).first()
         if pending is None:
@@ -449,6 +486,11 @@ class PasswordResetRequestView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
+        if not settings.EMAIL_NOTIFICATIONS_ENABLED:
+            return Response(
+                {"detail": "Password recovery by email is paused during testing."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         email = str(request.data.get("email", "")).strip().lower()
         user = User.objects.filter(email__iexact=email, is_staff=False).first()
         if user is not None:
@@ -1027,6 +1069,19 @@ class MessageViewSet(viewsets.ModelViewSet):
 
         return queryset
 
+    @action(detail=True, methods=["get"], url_path="attachment")
+    def attachment(self, request, pk=None):
+        message = self.get_object()
+        if not message.attachment:
+            return Response({"detail": "This message has no attachment."}, status=status.HTTP_404_NOT_FOUND)
+        content_type = mimetypes.guess_type(message.attachment.name)[0]
+        response = FileResponse(
+            message.attachment.open("rb"),
+            content_type=content_type or "application/octet-stream",
+        )
+        response["Content-Disposition"] = "inline"
+        return response
+
 
 
     def perform_create(self, serializer):
@@ -1191,6 +1246,86 @@ class BusinessFollowViewSet(viewsets.ModelViewSet):
             notification_type=Notification.FOLLOW,
             message=f"{self.request.user.username} followed your business."
         )
+
+    def perform_destroy(self, instance):
+        # A community membership depends on following the business.
+        CommunityMembership.objects.filter(
+            user=self.request.user,
+            business=instance.business,
+        ).delete()
+        instance.delete()
+
+
+class CommunityViewSet(viewsets.ReadOnlyModelViewSet):
+    """Community listings are available to followers and the business owner."""
+
+    serializer_class = CommunitySerializer
+    permission_classes = [IsAuthenticated]
+    pagination_class = MarketplacePagination
+
+    def get_queryset(self):
+        user = self.request.user
+        return BusinessProfile.objects.filter(is_suspended=False).filter(
+            Q(followers__user=user) | Q(user=user)
+        ).select_related("user").distinct().order_by("name")
+
+    @action(detail=True, methods=["post"])
+    def join(self, request, pk=None):
+        business = self.get_object()
+        if business.user_id == request.user.id:
+            return Response({"detail": "You own this community."}, status=status.HTTP_200_OK)
+        if not BusinessFollow.objects.filter(user=request.user, business=business).exists():
+            raise PermissionDenied("Follow this business before joining its community.")
+        membership, created = CommunityMembership.objects.get_or_create(
+            user=request.user,
+            business=business,
+        )
+        return Response(
+            {"joined": True, "created": created, "joined_at": membership.joined_at},
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"])
+    def leave(self, request, pk=None):
+        business = self.get_object()
+        if business.user_id == request.user.id:
+            raise ValidationError("The business owner cannot leave their own community.")
+        CommunityMembership.objects.filter(user=request.user, business=business).delete()
+        return Response({"joined": False}, status=status.HTTP_200_OK)
+
+
+class CommunityPostViewSet(viewsets.ModelViewSet):
+    serializer_class = CommunityPostSerializer
+    permission_classes = [IsAuthenticated]
+    pagination_class = MarketplacePagination
+    http_method_names = ["get", "post", "delete", "head", "options"]
+
+    def get_queryset(self):
+        business_id = self.request.query_params.get("business")
+        if not business_id:
+            return CommunityPost.objects.none()
+        user = self.request.user
+        return CommunityPost.objects.filter(
+            business_id=business_id,
+            business__is_suspended=False,
+        ).filter(
+            Q(business__user=user) | Q(business__community_memberships__user=user)
+        ).select_related("business", "author").distinct()
+
+    def perform_create(self, serializer):
+        business = get_object_or_404(
+            BusinessProfile,
+            id=self.request.data.get("business"),
+            is_suspended=False,
+        )
+        if business.user_id != self.request.user.id:
+            raise PermissionDenied("Only this business can publish community updates.")
+        serializer.save(business=business, author=self.request.user)
+
+    def perform_destroy(self, instance):
+        if instance.business.user_id != self.request.user.id:
+            raise PermissionDenied("Only the business can remove its community updates.")
+        instance.delete()
 
 
 

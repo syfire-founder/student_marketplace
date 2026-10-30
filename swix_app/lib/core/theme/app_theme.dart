@@ -8,4 +8,12 @@ class AppTheme {
       brightness: Brightness.light,
     );
   }
+
+  static ThemeData get darkTheme {
+    return ThemeData(
+      useMaterial3: true,
+      colorSchemeSeed: Colors.blue,
+      brightness: Brightness.dark,
+    );
+  }
 }

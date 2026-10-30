@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/api/api_client.dart';
 import '../../../../core/services/token_storage.dart';
 import 'chat_screen.dart';
+import '../../../communities/presentation/screens/communities_screen.dart';
 
 class InboxScreen extends StatefulWidget {
   const InboxScreen({super.key, this.onUnreadMessagesChanged});
@@ -57,8 +58,36 @@ class _InboxScreenState extends State<InboxScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: FutureBuilder<List<Map<String, dynamic>>>(
+    return DefaultTabController(
+      length: 2,
+      child: SafeArea(
+        child: Column(
+          children: [
+            Material(
+              color: Theme.of(context).colorScheme.surface,
+              child: TabBar(
+                tabs: const [
+                  Tab(text: 'Messages'),
+                  Tab(text: 'Communities'),
+                ],
+              ),
+            ),
+            Expanded(
+              child: TabBarView(
+                children: [
+                  _buildMessages(),
+                  const CommunitiesScreen(),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMessages() {
+    return FutureBuilder<List<Map<String, dynamic>>>(
         future: _conversations,
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
@@ -139,8 +168,7 @@ class _InboxScreenState extends State<InboxScreen> {
             ),
           );
         },
-      ),
-    );
+      );
   }
 }
 

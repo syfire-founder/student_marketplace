@@ -15,6 +15,7 @@ import '../../../products/presentation/screens/product_detail_screen.dart';
 import '../../../products/presentation/screens/favorites_screen.dart';
 import '../../../products/presentation/screens/business_profile_screen.dart';
 import '../../../products/presentation/screens/business_analytics_screen.dart';
+import 'appearance_settings_screen.dart';
 
 class AuthenticatedScreen extends ConsumerStatefulWidget {
   const AuthenticatedScreen({super.key});
@@ -1083,6 +1084,22 @@ class _ProfileTab extends ConsumerWidget {
                   Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (_) => const FavoritesScreen(),
+                    ),
+                  );
+                },
+              ),
+            ),
+
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.palette_outlined),
+                title: const Text('Appearance'),
+                subtitle: const Text('Choose light, dark, or device setting'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const AppearanceSettingsScreen(),
                     ),
                   );
                 },

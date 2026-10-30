@@ -8,8 +8,14 @@ from .models import (
     ProductFavorite,
     BusinessFollow,
 )
-from .models import Review, Notification
+from .models import (
+    Review,
+    Notification,
+    CommunityMembership,
+    CommunityPost,
+)
 from django.db.models import Avg
+from django.urls import reverse
 from .models import Conversation, Message, ProductView, Report
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -427,8 +433,11 @@ class ConversationSerializer(serializers.ModelSerializer):
         message = obj.messages.select_related("sender").order_by("-created_at").first()
         if message is None:
             return None
+        preview = message.text.strip()
+        if not preview and message.attachment_type:
+            preview = "Photo" if message.attachment_type == "photo" else "Video"
         return {
-            "text": message.text,
+            "text": preview,
             "sender": message.sender.username,
             "is_mine": message.sender_id == self.context["request"].user.id,
             "created_at": message.created_at,
@@ -460,6 +469,14 @@ class ConversationSerializer(serializers.ModelSerializer):
 class MessageSerializer(serializers.ModelSerializer):
     sender = serializers.StringRelatedField(read_only=True)
     is_mine = serializers.SerializerMethodField()
+    text = serializers.CharField(required=False, allow_blank=True)
+    attachment = serializers.SerializerMethodField()
+    attachment_upload = serializers.FileField(
+        source="attachment",
+        write_only=True,
+        required=False,
+        allow_null=True,
+    )
     product_image = serializers.SerializerMethodField()
     reply_to_text = serializers.SerializerMethodField()
     reply_to_sender = serializers.SerializerMethodField()
@@ -468,6 +485,13 @@ class MessageSerializer(serializers.ModelSerializer):
         read_only=True,
         allow_null=True,
     )
+
+    def get_attachment(self, obj):
+        if not obj.attachment:
+            return None
+        request = self.context.get("request")
+        path = reverse("message-attachment", kwargs={"pk": obj.pk})
+        return request.build_absolute_uri(path) if request else path
 
     def get_product_image(self, obj):
         if not obj.product_id:
@@ -484,7 +508,14 @@ class MessageSerializer(serializers.ModelSerializer):
         return image_url
 
     def get_reply_to_text(self, obj):
-        return obj.reply_to.text if obj.reply_to_id else None
+        if not obj.reply_to_id:
+            return None
+        text = obj.reply_to.text.strip()
+        if text:
+            return text
+        if obj.reply_to.attachment_type:
+            return "Photo" if obj.reply_to.attachment_type == "photo" else "Video"
+        return None
 
     def get_reply_to_sender(self, obj):
         return obj.reply_to.sender.username if obj.reply_to_id else None
@@ -492,6 +523,35 @@ class MessageSerializer(serializers.ModelSerializer):
     def get_is_mine(self, obj):
         request = self.context.get("request")
         return bool(request and request.user == obj.sender)
+
+    def validate(self, attrs):
+        text = attrs.get("text", getattr(self.instance, "text", ""))
+        attachment = attrs.get("attachment", getattr(self.instance, "attachment", None))
+        attachment_type = attrs.get(
+            "attachment_type",
+            getattr(self.instance, "attachment_type", ""),
+        )
+        if not text.strip() and not attachment:
+            raise serializers.ValidationError("Write a message or attach a photo or video.")
+        if attachment:
+            if attachment.size > 50 * 1024 * 1024:
+                raise serializers.ValidationError({"attachment": "Attachments must be 50 MB or smaller."})
+            extension = attachment.name.rsplit(".", 1)[-1].lower() if "." in attachment.name else ""
+            photo_extensions = {"jpg", "jpeg", "png", "gif", "webp"}
+            video_extensions = {"mp4", "mov", "webm", "m4v"}
+            expected_type = (
+                "photo" if extension in photo_extensions
+                else "video" if extension in video_extensions
+                else None
+            )
+            if expected_type is None:
+                raise serializers.ValidationError({"attachment": "Choose a supported photo or video file."})
+            if attachment_type and attachment_type != expected_type:
+                raise serializers.ValidationError({"attachment_type": "The attachment type does not match the file."})
+            attrs["attachment_type"] = expected_type
+        else:
+            attrs["attachment_type"] = ""
+        return attrs
 
     class Meta:
         model = Message
@@ -501,6 +561,9 @@ class MessageSerializer(serializers.ModelSerializer):
             "product",
             "product_name",
             "product_image",
+            "attachment",
+            "attachment_upload",
+            "attachment_type",
             "reply_to",
             "reply_to_text",
             "reply_to_sender",
@@ -517,6 +580,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "created_at",
             "product_name",
             "product_image",
+            "attachment",
             "reply_to_text",
             "reply_to_sender",
         ]
@@ -540,6 +604,84 @@ class BusinessFollowSerializer(serializers.ModelSerializer):
             "user",
             "created_at",
         ]
+
+
+class CommunitySerializer(serializers.ModelSerializer):
+    is_following = serializers.SerializerMethodField()
+    is_member = serializers.SerializerMethodField()
+    is_owner = serializers.SerializerMethodField()
+    latest_post = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BusinessProfile
+        fields = ["id", "name", "logo", "description", "is_following", "is_member", "is_owner", "latest_post"]
+
+    def _user(self):
+        return self.context["request"].user
+
+    def get_is_following(self, obj):
+        return BusinessFollow.objects.filter(user=self._user(), business=obj).exists()
+
+    def get_is_member(self, obj):
+        user = self._user()
+        return obj.user_id == user.id or CommunityMembership.objects.filter(
+            user=user, business=obj
+        ).exists()
+
+    def get_is_owner(self, obj):
+        return obj.user_id == self._user().id
+
+    def get_latest_post(self, obj):
+        user = self._user()
+        if obj.user_id != user.id and not CommunityMembership.objects.filter(
+            user=user,
+            business=obj,
+        ).exists():
+            return None
+        post = obj.community_posts.first()
+        if post is None:
+            return None
+        return CommunityPostSerializer(post, context=self.context).data
+
+
+class CommunityPostSerializer(serializers.ModelSerializer):
+    business_name = serializers.CharField(source="business.name", read_only=True)
+    author = serializers.CharField(source="author.username", read_only=True)
+    media = serializers.FileField(required=False, allow_null=True)
+
+    class Meta:
+        model = CommunityPost
+        fields = [
+            "id", "business", "business_name", "author", "message",
+            "media", "media_type", "created_at",
+        ]
+        read_only_fields = ["id", "business_name", "author", "created_at"]
+
+    def validate(self, attrs):
+        message = attrs.get("message", getattr(self.instance, "message", ""))
+        media = attrs.get("media", getattr(self.instance, "media", None))
+        media_type = attrs.get("media_type", getattr(self.instance, "media_type", ""))
+        if not str(message or "").strip() and not media:
+            raise serializers.ValidationError("Add a message, photo, or video to your update.")
+        if media:
+            if media.size > 50 * 1024 * 1024:
+                raise serializers.ValidationError({"media": "Media must be 50 MB or smaller."})
+            extension = media.name.rsplit(".", 1)[-1].lower() if "." in media.name else ""
+            image_extensions = {"jpg", "jpeg", "png", "gif", "webp"}
+            video_extensions = {"mp4", "mov", "webm", "m4v"}
+            expected_type = (
+                "image" if extension in image_extensions
+                else "video" if extension in video_extensions
+                else None
+            )
+            if expected_type is None:
+                raise serializers.ValidationError({"media": "Choose a supported image or video file."})
+            if media_type and media_type != expected_type:
+                raise serializers.ValidationError({"media_type": "The selected media type does not match the file."})
+            attrs["media_type"] = expected_type
+        else:
+            attrs["media_type"] = ""
+        return attrs
 
 class NotificationSerializer(serializers.ModelSerializer):
     sender = serializers.StringRelatedField(read_only=True)
