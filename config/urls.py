@@ -20,7 +20,7 @@ from django.urls import path, include
 from rest_framework_simplejwt.views import(TokenObtainPairView, TokenRefreshView)
 from django.conf import settings
 from django.conf.urls.static import static
-
+from .media_views import serve_media
 
 def health_check(request):
     return JsonResponse({'status': 'ok'})
@@ -29,6 +29,7 @@ def health_check(request):
 urlpatterns = [
     path('healthz', health_check, name='health_check'),
     path('admin/', admin.site.urls),
+    path('media/<path:file_path>', serve_media, name='serve_media'),
     path('api/', include('users.urls')),
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'), path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),]
 
