@@ -29,9 +29,7 @@ def _env_bool(name, default=False):
 
 
 DEBUG = _env_bool("DEBUG", default=False)
-SECRET_KEY = os.getenv("SECRET_KEY") or (
-    os.getenv("SECRETE_KEY", "") if DEBUG else ""
-)
+SECRET_KEY = os.getenv("SECRET_KEY", "")
 if not SECRET_KEY:
     raise ImproperlyConfigured("Set SECRET_KEY in the environment.")
 if not DEBUG and (
