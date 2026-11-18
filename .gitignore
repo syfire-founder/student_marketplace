@@ -26,3 +26,18 @@ Thumbs.db
 
 # Local Flutter diagnostic output
 **/flutter_debug.txt
+
+# Bluubase database backups and recovery data
+/bluubase-backup-contents.txt
+/bluubase-backup-inspection.sql
+/bluubase-data-fixture*.json
+/bluubase-recovery-*.json
+/bluubase-render-backup-*.dump
+/bluubase-render-dump.json
+
+# Local database recovery and validation scripts
+/inspect_fixture_relations.py
+/validate_fixture.py
+/validate_fixture_media.py
+/validate_fixture_relationships.py
+/verify_media.py
