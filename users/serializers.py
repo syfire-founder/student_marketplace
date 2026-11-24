@@ -177,6 +177,7 @@ class ListingImageSerializer(serializers.ModelSerializer):
 
 class ProductSerializer(serializers.ModelSerializer):
     images = ListingImageSerializer(many=True, read_only=True)
+    is_business_owner = serializers.SerializerMethodField()
 
     seller_id = serializers.IntegerField(
         source="business.user.id",
@@ -229,6 +230,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "business",
             "business_name",
             "seller_id",
+            "is_business_owner",
 
             "category",
             "category_name",
@@ -244,11 +246,20 @@ class ProductSerializer(serializers.ModelSerializer):
             "business",
             "business_name",
             "seller_id",
+            "is_business_owner",
             "category_name",
             "school",
             "school_name",
             "created_at",
         ]
+
+    def get_is_business_owner(self, obj):
+        request = self.context.get("request")
+        return bool(
+            request
+            and request.user.is_authenticated
+            and obj.business.user_id == request.user.id
+        )
             
         
 
