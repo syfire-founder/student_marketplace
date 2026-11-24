@@ -658,7 +658,7 @@ class ProductViewSet(viewsets.ModelViewSet):
 
         return filtered
 
-    def perform_create(self, serializer):
+    def _get_business_for_write(self):
         try:
             business = self.request.user.businessprofile
         except BusinessProfile.DoesNotExist:
@@ -670,6 +670,15 @@ class ProductViewSet(viewsets.ModelViewSet):
             raise PermissionDenied(
                 "Your business profile is suspended, so you cannot add listings."
             )
+        return business
+
+    def create(self, request, *args, **kwargs):
+        # Reject non-owners before serializer validation can reveal listing fields.
+        self._get_business_for_write()
+        return super().create(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        business = self._get_business_for_write()
 
         images = self.request.FILES.getlist("images")
         if not images:
