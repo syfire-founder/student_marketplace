@@ -15,6 +15,7 @@ from .views import (
     CategoryListCreateView,
     CategoryRetrieveUpdateDestroyView,
     SchoolViewSet,
+    CampusLocationViewSet,
     UserProfileView,
     ReviewViewSet,
     BusinessDashboardView,
@@ -48,6 +49,11 @@ router.register(r'products', ProductViewSet, basename='product')
 router.register(r'listing-images', ListingImageViewSet, basename='listing-images')
 router.register(r'businessprofiles', BusinessProfileViewSet, basename='businessprofile')
 router.register(r'schools', SchoolViewSet, basename='school')
+router.register(
+    r'campus-locations',
+    CampusLocationViewSet,
+    basename='campus-location',
+)
 router.register(
     r"reviews",
     ReviewViewSet,

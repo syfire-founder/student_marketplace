@@ -3,7 +3,7 @@ from .models import BusinessProfile, Product
 from .models import ListingImage
 from .models import Category
 from django.contrib.auth.models import User
-from .models import UserProfile, School
+from .models import UserProfile, School, CampusLocation
 from .models import (
     ProductFavorite,
     BusinessFollow,
@@ -50,6 +50,23 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
         read_only=True
     )
 
+    campus_location = serializers.PrimaryKeyRelatedField(
+        queryset=CampusLocation.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    campus_location_name = serializers.CharField(
+        source="campus_location.name",
+        read_only=True,
+        allow_null=True,
+    )
+    location_label = serializers.CharField(read_only=True)
+    location_details = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=255,
+    )
+
     class Meta:
         model = BusinessProfile
         fields = [
@@ -61,6 +78,10 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
             "category_name",
             "school",
             "school_name",
+            "campus_location",
+            "campus_location_name",
+            "location_details",
+            "location_label",
             "products",
             "is_owner",
         ]
@@ -70,8 +91,48 @@ class BusinessProfileSerializer(serializers.ModelSerializer):
             "school",
             "school_name",
             "category_name",
+            "campus_location_name",
+            "location_label",
             "is_owner",
         ]
+
+    def validate(self, attrs):
+        location = attrs.get(
+            "campus_location",
+            self.instance.campus_location if self.instance is not None else None,
+        )
+        details = attrs.get(
+            "location_details",
+            self.instance.location_details if self.instance is not None else "",
+        ).strip()
+
+        request = self.context.get("request")
+        try:
+            school = request.user.userprofile.school if request else None
+        except UserProfile.DoesNotExist:
+            school = None
+
+        if location is None:
+            if school is not None and CampusLocation.objects.filter(
+                school=school
+            ).exists():
+                raise serializers.ValidationError({
+                    "campus_location": "Choose a location inside your school."
+                })
+            return attrs
+
+        if school is None or location.school_id != school.id:
+            raise serializers.ValidationError({
+                "campus_location": "Choose a location inside your selected school."
+            })
+
+        if location.is_other and not details:
+            raise serializers.ValidationError({
+                "location_details": "Specify the location inside your school campus."
+            })
+        if not location.is_other:
+            attrs["location_details"] = ""
+        return attrs
 
     def get_is_owner(self, obj):
         request = self.context.get("request")
@@ -216,6 +277,11 @@ class ProductSerializer(serializers.ModelSerializer):
         read_only=True
     )
 
+    business_location = serializers.CharField(
+        source="business.location_label",
+        read_only=True,
+    )
+
     class Meta:
         model = Product
         fields = [
@@ -238,6 +304,7 @@ class ProductSerializer(serializers.ModelSerializer):
 
             "school",
             "school_name",
+            "business_location",
 
             "images",
         ]
@@ -251,6 +318,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "category_name",
             "school",
             "school_name",
+            "business_location",
             "created_at",
         ]
 
@@ -268,6 +336,15 @@ class SchoolSerializer(serializers.ModelSerializer):
     class Meta:
         model = School
         fields = '__all__'
+
+
+class CampusLocationSerializer(serializers.ModelSerializer):
+    school_name = serializers.CharField(source="school.name", read_only=True)
+
+    class Meta:
+        model = CampusLocation
+        fields = ["id", "school", "school_name", "name", "is_other"]
+        read_only_fields = ["id", "school_name"]
 
 
 

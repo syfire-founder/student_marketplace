@@ -15,6 +15,23 @@ class School(models.Model):
     def __str__(self):
         return self.name
 
+
+class CampusLocation(models.Model):
+    school = models.ForeignKey(
+        School,
+        on_delete=models.CASCADE,
+        related_name="campus_locations",
+    )
+    name = models.CharField(max_length=100)
+    is_other = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["name"]
+        unique_together = [("school", "name")]
+
+    def __str__(self):
+        return f"{self.name} ({self.school.name})"
+
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     school = models.ForeignKey(
@@ -44,6 +61,22 @@ class BusinessProfile(models.Model):
         School,
         on_delete=models.CASCADE
         )
+    campus_location = models.ForeignKey(
+        CampusLocation,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="businesses",
+    )
+    location_details = models.CharField(max_length=255, blank=True)
+
+    @property
+    def location_label(self):
+        if self.campus_location is None:
+            return "Location not set"
+        if self.campus_location.is_other and self.location_details.strip():
+            return f"Other: {self.location_details.strip()}"
+        return self.campus_location.name
     
     def __str__(self):
         return self.name

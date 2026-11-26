@@ -13,7 +13,7 @@ import secrets
 
 from .models import (
     BusinessProfile, BusinessProfileVisit, Product, AppVisit, PendingRegistration,
-    AccountRecoveryCode,
+    AccountRecoveryCode, CampusLocation,
 )
 from .serializers import BusinessProfileSerializer, ProductSerializer, ListingImageSerializer
 
@@ -38,7 +38,11 @@ from .models import ListingImage
 from django.shortcuts import get_object_or_404
 from rest_framework.permissions import AllowAny, IsAdminUser
 from .models import School
-from .serializers import SchoolSerializer, UserProfileSerializer
+from .serializers import (
+    SchoolSerializer,
+    UserProfileSerializer,
+    CampusLocationSerializer,
+)
 from .permissions import IsBusinessOwner
 from .serializers import ReviewSerializer
 from .models import Review
@@ -201,7 +205,9 @@ class BusinessProfileViewSet(viewsets.ModelViewSet):
     ordering = ["-id"]
 
     def get_queryset(self):
-        queryset = BusinessProfile.objects.all()
+        queryset = BusinessProfile.objects.select_related(
+            "school", "campus_location", "user", "category"
+        )
         user = self.request.user
         if user.is_staff:
             return queryset
@@ -295,7 +301,9 @@ class BusinessProfileSearchViewSet(viewsets.ReadOnlyModelViewSet):
     ordering_fields = ['name', 'id']
 
     def get_queryset(self):
-        queryset = BusinessProfile.objects.filter(is_suspended=False)
+        queryset = BusinessProfile.objects.filter(
+            is_suspended=False
+        ).select_related("school", "campus_location", "user", "category")
         return _school_scoped_queryset(queryset, self.request.user, "school")
     ordering = ["-id"]
 
@@ -658,6 +666,7 @@ class ProductViewSet(viewsets.ModelViewSet):
             "business",
             "business__school",
             "business__user",
+            "business__campus_location",
         ).prefetch_related(
             "images"
         )
@@ -860,6 +869,15 @@ class SchoolViewSet(ModelViewSet):
         if self.request.method in ["GET", "HEAD", "OPTIONS"]:
             return [AllowAny()]
         return [IsAdminUser()]
+
+
+class CampusLocationViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = CampusLocationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = CampusLocation.objects.select_related("school").order_by("name")
+        return _school_scoped_queryset(queryset, self.request.user, "school")
 
 
 
@@ -1233,7 +1251,11 @@ class ProductFavoriteViewSet(viewsets.ModelViewSet):
         queryset = ProductFavorite.objects.filter(
             user=self.request.user,
             product__business__is_suspended=False,
-        ).select_related("product")
+        ).select_related(
+            "product",
+            "product__business__campus_location",
+            "product__business__school",
+        )
         return _school_scoped_queryset(
             queryset, self.request.user, "product__business__school"
         )
@@ -1472,7 +1494,7 @@ class SearchView(APIView):
             business__is_suspended=False,
             is_private=False,
             is_available=True,
-        )
+        ).select_related("business__campus_location", "business__school")
 
         # 4. Search text
         if query:
@@ -1511,7 +1533,7 @@ class SearchView(APIView):
         businesses = BusinessProfile.objects.filter(
             school=school,
             is_suspended=False,
-        )
+        ).select_related("school", "campus_location", "user", "category")
         if query:
             businesses = businesses.filter(
                 Q(name__icontains=query) |
@@ -1552,6 +1574,7 @@ class HomeFeedView(APIView):
             is_private=False
             ).select_related(
                 "business",
+                "business__campus_location",
                 "category",
             ).prefetch_related(
                 "images",
@@ -1665,6 +1688,7 @@ class RecentlyViewedView(APIView):
             .select_related(
                 "product",
                 "product__business",
+                "product__business__campus_location",
                 "product__category",
             )
             .order_by("-viewed_at")
@@ -1699,7 +1723,12 @@ class RecentlyViewedBusinessesView(APIView):
         visits = (
             BusinessProfileVisit.objects
             .filter(user=request.user, business__is_suspended=False)
-            .select_related("business", "business__category", "business__school")
+            .select_related(
+                "business",
+                "business__category",
+                "business__school",
+                "business__campus_location",
+            )
             .order_by("-viewed_at")
         )
         visits = _school_scoped_queryset(
