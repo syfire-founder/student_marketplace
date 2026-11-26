@@ -874,6 +874,7 @@ class SchoolViewSet(ModelViewSet):
 class CampusLocationViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = CampusLocationSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = None
 
     def get_queryset(self):
         queryset = CampusLocation.objects.select_related("school").order_by("name")
