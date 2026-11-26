@@ -21,15 +21,12 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   final _confirmPasswordController = TextEditingController();
   final _verificationCodeController = TextEditingController();
 
-  late Future<List<_School>> _schools;
-  int? _schoolId;
   bool _obscurePassword = true;
   bool _awaitingCode = false;
 
   @override
   void initState() {
     super.initState();
-    _schools = _loadSchools();
   }
 
   @override
@@ -42,25 +39,8 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     super.dispose();
   }
 
-  Future<List<_School>> _loadSchools() async {
-    final response = await Dio().get('${ApiClient.baseUrl}/schools/');
-    final data = response.data;
-    final items = data is Map
-        ? data['results'] as List? ?? const []
-        : data as List;
-    return items
-        .map((item) => _School.fromJson(Map<String, dynamic>.from(item as Map)))
-        .toList();
-  }
-
   Future<void> _register() async {
     if (!_formKey.currentState!.validate()) return;
-    if (_schoolId == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Choose your school.')));
-      return;
-    }
 
     await ref
         .read(authControllerProvider.notifier)
@@ -68,7 +48,6 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
           username: _usernameController.text.trim(),
           email: _emailController.text.trim(),
           password: _passwordController.text,
-          school: _schoolId!,
         );
 
     if (!mounted) return;
@@ -144,30 +123,13 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
         ref.watch(authControllerProvider).status == AuthStatus.loading;
     return Scaffold(
       appBar: AppBar(title: const Text('Create account')),
-      body: FutureBuilder<List<_School>>(
-        future: _schools,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snapshot.hasError) {
-            return Center(
-              child: FilledButton(
-                onPressed: () => setState(() => _schools = _loadSchools()),
-                child: const Text('Could not load schools — try again'),
-              ),
-            );
-          }
-          final schools = snapshot.data!;
-          return SafeArea(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: _awaitingCode
-                  ? _buildVerificationForm(isLoading)
-                  : _buildRegistrationForm(schools, isLoading),
-            ),
-          );
-        },
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: _awaitingCode
+              ? _buildVerificationForm(isLoading)
+              : _buildRegistrationForm(isLoading),
+        ),
       ),
     );
   }
@@ -214,7 +176,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     );
   }
 
-  Widget _buildRegistrationForm(List<_School> schools, bool isLoading) {
+  Widget _buildRegistrationForm(bool isLoading) {
     return Form(
       key: _formKey,
       child: Column(
@@ -245,15 +207,6 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
               if (!value.contains('@')) return 'Enter a valid email';
               return null;
             },
-          ),
-          const SizedBox(height: 16),
-          DropdownButtonFormField<int>(
-            initialValue: _schoolId,
-            isExpanded: true,
-            decoration: const InputDecoration(labelText: 'School', border: OutlineInputBorder()),
-            items: schools.map((school) => DropdownMenuItem(value: school.id, child: Text(school.name))).toList(),
-            onChanged: isLoading ? null : (value) => setState(() => _schoolId = value),
-            validator: (value) => value == null ? 'Choose your school' : null,
           ),
           const SizedBox(height: 16),
           TextFormField(
@@ -290,13 +243,4 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
       ),
     );
   }
-}
-
-class _School {
-  const _School({required this.id, required this.name});
-  final int id;
-  final String name;
-
-  factory _School.fromJson(Map<String, dynamic> json) =>
-      _School(id: json['id'] as int, name: json['name'] as String);
 }

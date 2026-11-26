@@ -25,7 +25,8 @@ class UserProfile(models.Model):
 )
 
     def __str__(self):
-        return f"{self.user.username} - {self.school.name}"
+        school_name = self.school.name if self.school_id else "School not selected"
+        return f"{self.user.username} - {school_name}"
 
 
 class BusinessProfile(models.Model):
@@ -347,7 +348,12 @@ class PendingRegistration(models.Model):
     username = models.CharField(max_length=150, unique=True)
     email = models.EmailField(unique=True)
     password_hash = models.CharField(max_length=128)
-    school = models.ForeignKey(School, on_delete=models.CASCADE)
+    school = models.ForeignKey(
+        School,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
     code_hash = models.CharField(max_length=128)
     expires_at = models.DateTimeField(db_index=True)
     last_sent_at = models.DateTimeField()

@@ -162,6 +162,34 @@ class UserProfileView(generics.RetrieveUpdateAPIView):
     def get_object(self):
         return self.request.user.userprofile
 
+    def perform_update(self, serializer):
+        profile = serializer.instance
+        selected_school = serializer.validated_data.get("school", profile.school)
+        if profile.school_id is not None and (
+            selected_school is None or selected_school.pk != profile.school_id
+        ):
+            raise PermissionDenied(
+                "Your school cannot be changed after setup. Contact support if this is incorrect."
+            )
+        if selected_school is None:
+            raise ValidationError({"school": "Choose your school to continue."})
+        serializer.save()
+
+
+def _school_scoped_queryset(queryset, user, school_field):
+    """Keep marketplace data within the signed-in user's selected school."""
+    if user.is_staff:
+        return queryset
+    if not user.is_authenticated:
+        return queryset.none()
+    try:
+        school = user.userprofile.school
+    except UserProfile.DoesNotExist:
+        return queryset.none()
+    if school is None:
+        return queryset.none()
+    return queryset.filter(**{school_field: school})
+
 
 
 class BusinessProfileViewSet(viewsets.ModelViewSet):
@@ -177,9 +205,17 @@ class BusinessProfileViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if user.is_staff:
             return queryset
-        if user.is_authenticated:
-            return queryset.filter(Q(is_suspended=False) | Q(user=user))
-        return queryset.filter(is_suspended=False)
+        if not user.is_authenticated:
+            return queryset.none()
+        try:
+            school = user.userprofile.school
+        except UserProfile.DoesNotExist:
+            return queryset.none()
+        if school is None:
+            return queryset.none()
+        return queryset.filter(
+            Q(is_suspended=False, school=school) | Q(user=user, school=school)
+        )
 
     @action(
         detail=False,
@@ -252,12 +288,15 @@ class BusinessProfileSearchViewSet(viewsets.ReadOnlyModelViewSet):
     Allows searching other users' business profiles.
     Users cannot edit/delete others' profiles here
     """
-    queryset = BusinessProfile.objects.all()
     serializer_class = BusinessProfileSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [SearchFilter]
     search_fields = ['name', 'description']
     ordering_fields = ['name', 'id']
+
+    def get_queryset(self):
+        queryset = BusinessProfile.objects.filter(is_suspended=False)
+        return _school_scoped_queryset(queryset, self.request.user, "school")
     ordering = ["-id"]
 
 
@@ -302,7 +341,7 @@ class RegisterView(APIView):
         username = serializer.validated_data["username"].strip()
         email = serializer.validated_data["email"].strip().lower()
         password = serializer.validated_data["password"]
-        school = serializer.validated_data["school"]
+        school = serializer.validated_data.get("school")
 
         if User.objects.filter(email__iexact=email).exists():
             raise ValidationError({"email": "An account already uses this email."})
@@ -435,8 +474,8 @@ class VerifyRegistrationView(APIView):
         _send_short_email(
             user.email,
             "Welcome to BluuBase",
-            f"Hi {user.username}, your BluuBase account is ready. You can now discover "
-            "campus businesses, save listings, and message sellers.",
+            f"Hi {user.username}, your BluuBase account is ready. Open the app and "
+            "choose your school to finish setup and explore campus listings.",
         )
         return Response(
             {"token": token.key, "is_admin": False},
@@ -623,19 +662,18 @@ class ProductViewSet(viewsets.ModelViewSet):
             "images"
         )
 
+        if user.is_staff:
+            return queryset
         if not user.is_authenticated:
-            return queryset.filter(
-                is_private=False,
-                business__is_suspended=False,
-            )
+            return queryset.none()
 
         try:
             user_school = user.userprofile.school
         except UserProfile.DoesNotExist:
-            return queryset.filter(
-                is_private=False,
-                business__is_suspended=False,
-            )
+            return queryset.none()
+
+        if user_school is None:
+            return queryset.none()
 
         filtered = queryset.filter(
             Q(
@@ -645,7 +683,8 @@ class ProductViewSet(viewsets.ModelViewSet):
             )
             |
             Q(
-                business__user=user
+                business__user=user,
+                business__school=user_school,
             )
         ).distinct()
 
@@ -833,7 +872,10 @@ class ReviewViewSet(viewsets.ModelViewSet):
     pagination_class = MarketplacePagination
 
     def get_queryset(self):
-        queryset = self.queryset
+        queryset = self.queryset.filter(business__is_suspended=False)
+        queryset = _school_scoped_queryset(
+            queryset, self.request.user, "business__school"
+        )
         business_id = self.request.query_params.get("business")
         if business_id:
             try:
@@ -853,6 +895,13 @@ class ReviewViewSet(viewsets.ModelViewSet):
         return [IsAuthenticated(), IsReviewOwner()]
 
     def perform_create(self, serializer):
+        business = serializer.validated_data.get("business")
+        if business is None or not _school_scoped_queryset(
+            BusinessProfile.objects.filter(pk=business.pk),
+            self.request.user,
+            "school",
+        ).exists():
+            raise PermissionDenied("This business is not available at your school.")
         serializer.save(user=self.request.user)
 
 
@@ -1181,10 +1230,13 @@ class ProductFavoriteViewSet(viewsets.ModelViewSet):
     pagination_class = MarketplacePagination
 
     def get_queryset(self):
-        return ProductFavorite.objects.filter(
+        queryset = ProductFavorite.objects.filter(
             user=self.request.user,
             product__business__is_suspended=False,
         ).select_related("product")
+        return _school_scoped_queryset(
+            queryset, self.request.user, "product__business__school"
+        )
 
     def perform_create(self, serializer):
         product_id = self.request.data.get("product")
@@ -1196,6 +1248,12 @@ class ProductFavoriteViewSet(viewsets.ModelViewSet):
 
         if product.business.is_suspended:
             raise ValidationError("This listing is unavailable.")
+        try:
+            school = self.request.user.userprofile.school
+        except UserProfile.DoesNotExist:
+            school = None
+        if school is None or product.business.school_id != school.id:
+            raise PermissionDenied("This listing is not available at your school.")
 
         if ProductFavorite.objects.filter(
             user=self.request.user,
@@ -1216,9 +1274,12 @@ class BusinessFollowViewSet(viewsets.ModelViewSet):
     pagination_class = MarketplacePagination
 
     def get_queryset(self):
-        return BusinessFollow.objects.filter(
+        queryset = BusinessFollow.objects.filter(
             user=self.request.user
         ).select_related("business")
+        return _school_scoped_queryset(
+            queryset, self.request.user, "business__school"
+        )
 
     def perform_create(self, serializer):
         business_id = self.request.data.get("business")
@@ -1235,6 +1296,12 @@ class BusinessFollowViewSet(viewsets.ModelViewSet):
 
         if business.is_suspended:
             raise ValidationError("This business profile is suspended.")
+        try:
+            school = self.request.user.userprofile.school
+        except UserProfile.DoesNotExist:
+            school = None
+        if school is None or business.school_id != school.id:
+            raise PermissionDenied("This business is not available at your school.")
 
         if BusinessFollow.objects.filter(
             user=self.request.user,
@@ -1274,9 +1341,10 @@ class CommunityViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        return BusinessProfile.objects.filter(is_suspended=False).filter(
+        queryset = BusinessProfile.objects.filter(is_suspended=False).filter(
             Q(followers__user=user) | Q(user=user)
         ).select_related("user").distinct().order_by("name")
+        return _school_scoped_queryset(queryset, user, "school")
 
     @action(detail=True, methods=["post"])
     def join(self, request, pk=None):
@@ -1601,6 +1669,9 @@ class RecentlyViewedView(APIView):
             )
             .order_by("-viewed_at")
         )
+        views = _school_scoped_queryset(
+            views, request.user, "product__business__school"
+        )
 
         # Keep one recent entry per listing, using its latest visit.
         recent_views = []
@@ -1629,8 +1700,11 @@ class RecentlyViewedBusinessesView(APIView):
             BusinessProfileVisit.objects
             .filter(user=request.user, business__is_suspended=False)
             .select_related("business", "business__category", "business__school")
-            .order_by("-viewed_at")[:30]
+            .order_by("-viewed_at")
         )
+        visits = _school_scoped_queryset(
+            visits, request.user, "business__school"
+        )[:30]
         return Response([
             {
                 "id": visit.id,

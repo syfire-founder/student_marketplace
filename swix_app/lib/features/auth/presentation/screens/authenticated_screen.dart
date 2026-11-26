@@ -16,6 +16,7 @@ import '../../../products/presentation/screens/favorites_screen.dart';
 import '../../../products/presentation/screens/business_profile_screen.dart';
 import '../../../products/presentation/screens/business_analytics_screen.dart';
 import 'appearance_settings_screen.dart';
+import 'school_selection_screen.dart';
 
 class AuthenticatedScreen extends ConsumerStatefulWidget {
   const AuthenticatedScreen({super.key});
@@ -29,11 +30,45 @@ class _AuthenticatedScreenState extends ConsumerState<AuthenticatedScreen> {
   int _tab = 0;
   bool _hasUnreadNotifications = false;
   bool _hasUnreadMessages = false;
+  bool _isCheckingSchool = true;
+  bool _needsSchool = false;
+  String? _schoolCheckError;
 
   @override
   void initState() {
     super.initState();
-    _refreshUnreadCounts();
+    _checkSchool();
+  }
+
+  Future<void> _checkSchool() async {
+    setState(() {
+      _isCheckingSchool = true;
+      _schoolCheckError = null;
+    });
+    try {
+      final token = await const TokenStorage().getToken();
+      if (token == null || token.isEmpty) {
+        throw Exception('Your session has expired. Please log in again.');
+      }
+      final response = await Dio().get(
+        '${ApiClient.baseUrl}/profile/',
+        options: Options(headers: {'Authorization': 'Token $token'}),
+      );
+      final profile = Map<String, dynamic>.from(response.data as Map);
+      if (!mounted) return;
+      final needsSchool = profile['school'] == null;
+      setState(() {
+        _needsSchool = needsSchool;
+        _isCheckingSchool = false;
+      });
+      if (!needsSchool) _refreshUnreadCounts();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isCheckingSchool = false;
+        _schoolCheckError = error.toString().replaceFirst('Exception: ', '');
+      });
+    }
   }
 
   Future<void> _refreshUnreadCounts() async {
@@ -65,6 +100,39 @@ class _AuthenticatedScreenState extends ConsumerState<AuthenticatedScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isCheckingSchool) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_schoolCheckError != null) {
+      return Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(_schoolCheckError!, textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                FilledButton(
+                  onPressed: _checkSchool,
+                  child: const Text('Try again'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    if (_needsSchool) {
+      return SchoolSelectionScreen(
+        onCompleted: () {
+          setState(() => _needsSchool = false);
+          _refreshUnreadCounts();
+        },
+      );
+    }
     return Scaffold(
       body: IndexedStack(
         index: _tab,

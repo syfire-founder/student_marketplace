@@ -111,10 +111,11 @@ class UserRegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
     email = serializers.EmailField(required=True, allow_blank=False)
 
-    # User chooses their school during registration
     school = serializers.PrimaryKeyRelatedField(
         queryset=School.objects.all(),
-        write_only=True
+        write_only=True,
+        required=False,
+        allow_null=True,
     )
 
     class Meta:
@@ -133,7 +134,7 @@ class UserRegisterSerializer(serializers.ModelSerializer):
         return value
 
     def create(self, validated_data):
-        school = validated_data.pop("school")
+        school = validated_data.pop("school", None)
 
         user = User.objects.create_user(
             username=validated_data["username"],

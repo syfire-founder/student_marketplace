@@ -37,7 +37,6 @@ class AuthRepository {
     required String username,
     required String email,
     required String password,
-    required int school,
   }) async {
     try {
       final response = await apiClient.dio.post(
@@ -46,7 +45,6 @@ class AuthRepository {
           'username': username,
           'email': email,
           'password': password,
-          'school': school,
         },
       );
 
